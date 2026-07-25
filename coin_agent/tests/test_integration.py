@@ -3,10 +3,10 @@ decisive conflict on candidate #1; true match requiring 3 questions; hedged answ
 adjudication — plus the general "loop terminates, actions are valid, never both None" checks
 that would otherwise use env.py's MockOracle.
 
-`extract.extract` / `adjudicate.adjudicate` are monkeypatched rather than calling a real VLM:
-their prompts (extract.EXTRACTION_PROMPT / adjudicate.ADJUDICATION_PROMPT) don't exist yet, but
-everything *around* them — budget tracking, compare/select wiring, monotonic belief
-accumulation, idempotency — is real and worth testing now.
+`extract.extract` / `adjudicate.adjudicate` are monkeypatched rather than calling a real VLM
+(both prompts are written now — see test_extract.py / test_adjudicate.py for those directly —
+but there's still no live vllm server in CI): this file's job is testing everything *around*
+them — budget tracking, compare/select wiring, monotonic belief accumulation, idempotency.
 
 Note: upstream `env.MockOracle.ask()` is itself missing `self` in its signature (a real bug,
 `m.ask(prompt=..., images=...)` raises `TypeError` — try it) and independent of the three issues

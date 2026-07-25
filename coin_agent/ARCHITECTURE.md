@@ -46,7 +46,7 @@ never overwritten, only ever added to.
 | `budget.py` | `BudgetController` — per-candidate question cap derived from steps/time remaining, reserving one conclusion step per estimated remaining candidate; soft/hard time stops. |
 | `priors.py` | Runtime lookup for `disc(slot, value, category)` from `artifacts/priors.json` (built offline by `scripts/build_priors.py`). |
 | `extract.py` | Candidate image → `ObservationFrame` via one Qwen VLM call (optionally self-consistency-voted on candidate #1). Confidence is the model's self-reported `visibility` alone for now — real per-token logprob slicing is a documented v2 addition, not faked in. |
-| `adjudicate.py` | Final match/no-match call: image + belief text + description + Q/A history (never the slot frame) → `<motivation><score>`. **`ADJUDICATION_PROMPT` not written yet — the one remaining prompt.** |
+| `adjudicate.py` | Final match/no-match call: image + belief text + description + Q/A history (never the slot frame) → `<motivation><score>`. Unlike `extract.py`, not description-blind — this call's whole job is comparing the candidate against the target concept. |
 | `llm.py` | Cached, timed, retrying wrapper around `utils.ClientBasedLLM` (the vllm/Qwen client). Everything else calls the VLM only through here. |
 | `questioner.py` | `GraphQuestioner(QuestionerInterface)` — wires all of the above into the loop above. The only place allowed to touch (and discard) `info["task_image"]`. |
 
@@ -58,8 +58,26 @@ never overwritten, only ever added to.
 
 ## What's stubbed vs. real
 
-- **Real, tested now (73 passing tests):** `schema`, `canon`, `state`, `compare`, `select`, `budget`, `parse` (both the oracle-answer path and the description-parse prompt), `extract` (prompt written, confidence math fixed — see below), `llm`, `questioner` orchestration (integration tests use monkeypatched `extract`/`adjudicate` to stay network-free).
-- **Structurally wired, waiting on a prompt:** `adjudicate.ADJUDICATION_PROMPT` — the one remaining piece.
-- **A real bug caught and fixed while writing `EXTRACTION_PROMPT`:** confidence used to multiply the visibility factor by a placeholder logprob value of 0.5 (since real per-token logprob slicing isn't implemented yet), which meant even a `"clear"` observation computed confidence `0.5 × 1.0 = 0.5` — below the default `tau_obs=0.80` — silently failing every slot's confidence check with no visible error. Fixed: confidence is the visibility factor alone until logprob slicing is a real v2 addition (`tests/test_extract.py::test_clear_visibility_meets_default_tau_obs` is the regression test).
-- **CLI stubs (logic depends on the above):** `scripts/build_priors.py`, `scripts/run_eval.py`, `scripts/ablate.py`.
+All three prompts (`parse.DESCRIPTION_PARSE_PROMPT`, `extract.EXTRACTION_PROMPT`,
+`adjudicate.ADJUDICATION_PROMPT`) are now written and wired in.
+
+- **Real, tested now (86 passing tests):** every module in `agent/` — `schema`, `canon`, `state`,
+  `compare`, `select`, `budget`, `parse`, `extract`, `adjudicate`, `llm`, and `questioner`
+  orchestration end to end. Integration tests still monkeypatch `extract`/`adjudicate` (there's
+  no live vllm server in CI), but `test_extract.py`/`test_adjudicate.py` exercise the real prompt
+  text and parsing logic directly.
+- **Two real bugs caught and fixed while writing these prompts** (both have regression tests):
+  1. `extract.py` confidence used to multiply the visibility factor by a placeholder logprob
+     value of 0.5, so even a `"clear"` observation computed confidence `0.5 × 1.0 = 0.5` — below
+     the default `tau_obs=0.80` — silently failing every slot's confidence check with no visible
+     error. Fixed: confidence is the self-reported visibility factor alone until real per-token
+     logprob slicing is a documented v2 addition, not faked in.
+  2. `adjudicate.qa_history_text` printed a bundled question's Q&A pair twice (`select.py` bundles
+     ≤2 same-region slots into one question, recorded once per slot in `belief.asked` with
+     identical question text) — deduped by question text.
+- **Not yet live-tested against a real vllm/Qwen server** — that's the natural next step once one
+  is running (spec §10 step 1: a small smoke test asserting the §0 ground-truth facts still hold
+  against the installed repo, still to write).
+- **CLI stubs (logic depends on the above, now unblocked):** `scripts/build_priors.py`,
+  `scripts/run_eval.py`, `scripts/ablate.py`.
 - **Runtime-only patches, upstream files untouched:** `patches/` — see `patches/README.md`.
