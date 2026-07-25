@@ -16,9 +16,12 @@ guessed from `target_description` text. Only fall back to the regex/LLM path if 
 integration point doesn't have `info["category"]` available.
 """
 
+import json
 import re
 
 from . import canon, schema
+from .extract import ExtractionParseError, _extract_json
+from .llm import LLMClient, LLMCallFailed
 from .state import SlotValue, TargetBelief
 
 HEDGE_MARKERS = [
@@ -120,13 +123,100 @@ def parse_oracle_answer(raw_answer: str, slot_key: str, question: str) -> SlotVa
 
 
 # --- initial description parse (spec §4) ---------------------------------------------------------
-# TODO(together): the non-category slots below are meant to be filled by "one text-only LLM call
-# using the same JSON schema" (spec §4) — that call needs a prompt, which we haven't written yet.
-# Until DESCRIPTION_PARSE_PROMPT is filled in, only `obj.category` (from `info["category"]`, or the
-# regex fallback) is seeded here; everything else starts unknown and gets filled by extract()/the
-# oracle during the episode, same as if the description hadn't mentioned it at all. This is a
-# conservative gap, not a correctness bug: worst case it costs a few wasted early questions.
-DESCRIPTION_PARSE_PROMPT = None
+# The one text-only LLM call that reads target_description and seeds everything it states into
+# the belief BEFORE any candidate image is seen — this is what makes candidate_pool()'s "not
+# implied by the description" filter and budget.ambiguity_allowance actually mean something.
+# obj.category is handled separately (info["category"], see module docstring) and Tier-C slots
+# (obj.style, obj.state, ctx.contains) are deliberately excluded — they're never decisive and
+# never queried (schema.py §3.2), so parsing them here would be pure overhead with no downstream
+# use. Only the *first* adjacent object/color is requested (ctx.adjacent[0].*) since every example
+# description in this dataset mentions at most one adjacent object.
+
+_DESCRIPTION_SLOT_KEYS = [
+    k for k in schema.SLOTS if k != "obj.category" and schema.spec_for(k).tier != schema.TIER_C
+] + ["ctx.adjacent[0].object", "ctx.adjacent[0].color"]
+
+NOT_MENTIONED = "not_mentioned"
+
+DESCRIPTION_PARSE_PROMPT = """You are extracting structured facts from one short description of \
+an object and its immediate surroundings.
+
+Description: "{description}"
+
+The object this sentence describes IS the target object — extract facts ABOUT it and about what \
+is spatially around it. Anything else the sentence names (a picture, a doorway, a wall) is \
+surrounding context, not the target itself.
+
+Extract ONLY facts explicitly stated or directly, unambiguously implied by this exact sentence. \
+Never guess, never fill in a plausible-sounding default, never use outside knowledge about what \
+this kind of object usually looks like. If the description does not mention a field, its value \
+must be exactly "{not_mentioned}".
+
+Rules (field names below are exactly the JSON keys you must use — see the schema at the bottom):
+- "X and Y <object>" (e.g. "white and multicolored clock") -> the first color is \
+obj.color_primary, the second is obj.color_secondary.
+- Object-name fields (ctx.above.object, ctx.support.object, ctx.adjacent[0].object, \
+room.notable_appliance) must be a single bare noun with no adjectives — "doorway", not "open \
+doorway"; "picture", not "black framed picture". Put color separately in the matching *.color \
+field. Drop any adjective that doesn't fit one of these fields (e.g. "open", "framed", "faceted") \
+rather than folding it into the noun.
+- "beneath/under/below X" -> the object is BELOW X, so X is ctx.above.object (plus \
+ctx.above.material/ctx.above.color if X's material/color is also given).
+- "standing on/set into/resting on/hanging on X" -> X is ctx.support.object.
+- "next to/beside/against X" -> X is ctx.adjacent[0].object (plus ctx.adjacent[0].color if X's \
+color is given).
+- "with <material> accents/trim" (e.g. "red tile accents") -> that material is obj.material, and \
+its color is obj.color_secondary.
+- A wall's color mentioned anywhere -> room.wall_color. A floor's color/material -> \
+room.floor_color / room.floor_material.
+- Loose or movable items (stuffed animals, plush toys, towels) are contents, not context — there \
+is no field for them; leave every other field "{not_mentioned}" if this is all the sentence says.
+
+Return ONLY strict JSON, no other text, with exactly these keys and no others:
+{schema_keys}
+"""
+
+
+def _build_description_prompt(description: str) -> str:
+    schema_keys_skeleton = json.dumps({k: NOT_MENTIONED for k in _DESCRIPTION_SLOT_KEYS}, indent=2)
+    return DESCRIPTION_PARSE_PROMPT.format(
+        description=description, not_mentioned=NOT_MENTIONED, schema_keys=schema_keys_skeleton,
+    )
+
+
+def _slot_value_from_description_field(slot_key: str, raw_value) -> SlotValue | None:
+    if not isinstance(raw_value, str) or raw_value.strip().lower() == NOT_MENTIONED:
+        return None
+    value_type = schema.spec_for(slot_key).type
+    if value_type in schema.VOCAB:
+        canon_value = canon.normalize(raw_value, value_type) or canon.find_in_text(raw_value, value_type)
+    elif value_type == "int":
+        canon_value = str(_extract_count(raw_value)) if _extract_count(raw_value) is not None else None
+    elif value_type == "bool":
+        canon_value = str(_extract_bool(raw_value)).lower() if _extract_bool(raw_value) is not None else None
+    else:
+        canon_value = _norm_text(raw_value) or None
+    if canon_value is None:
+        return None
+    return SlotValue(
+        raw=raw_value, canon=canon_value, confidence=1.0, certainty="resolved",
+        provenance="description", source_question=None,
+    )
+
+
+def parse_description_llm_response(text: str) -> dict[str, SlotValue]:
+    """Raises ExtractionParseError (via _extract_json) on malformed JSON — caller degrades by
+    keeping whatever was already seeded from info["category"], per this module's docstring: a
+    missing/failed description parse costs a few wasted early questions, not a correctness bug.
+    """
+    parsed = _extract_json(text)
+    slots = {}
+    for slot_key in _DESCRIPTION_SLOT_KEYS:
+        value = _slot_value_from_description_field(slot_key, parsed.get(slot_key))
+        if value is not None:
+            slots[slot_key] = value
+    return slots
+
 
 _CATEGORY_HEURISTIC = re.compile(r"^(?:[a-z]+ ){0,3}?([a-z_]+)$")
 
@@ -140,7 +230,9 @@ def _category_fallback(description: str) -> str | None:
     return words[-1] if words else None
 
 
-def parse_description(description: str, info_category: str | None = None) -> TargetBelief:
+def parse_description(
+    description: str, info_category: str | None = None, llm_client: LLMClient | None = None,
+) -> TargetBelief:
     belief = TargetBelief(description=description, noun_phrase=(info_category or description))
 
     category_text = info_category or _category_fallback(description)
@@ -155,5 +247,13 @@ def parse_description(description: str, info_category: str | None = None) -> Tar
         # Prefer "the {category}" over the raw category string as the noun phrase — reads more
         # naturally in the wh-templates ("What is the primary color of the cabinet?").
         belief.noun_phrase = f"the {_norm_text(category_text)}"
+
+    if llm_client is not None:
+        try:
+            result = llm_client.call(_build_description_prompt(description), temperature=0.0)
+            for slot_key, value in parse_description_llm_response(result.text).items():
+                belief.set_slot(slot_key, value)
+        except (LLMCallFailed, ExtractionParseError):
+            pass  # degrade: belief keeps only obj.category, same as a plain "category" description
 
     return belief

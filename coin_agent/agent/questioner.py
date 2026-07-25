@@ -39,11 +39,8 @@ class GraphQuestioner(QuestionerInterface):
         self.config = load_config(config_path)
         self.max_adjacent = self.config["schema"]["max_adjacent"]
 
-        # Ground-truth note (env.py:135, not in the original spec): info["category"] is set on
-        # every reset() regardless of --description-type — use it instead of guessing obj.category
-        # from the description text. See parse.py's module docstring for the full rationale.
-        self.belief = parse.parse_description(self.target_description, info.get("category"))
-
+        # llm_client must exist before parse_description() — it now makes a text-only call to
+        # seed the belief from target_description itself, not just obj.category.
         model_id = model_id or self.config["vllm"]["model_id"]
         self.llm_client = LLMClient(
             model_id,
@@ -53,6 +50,12 @@ class GraphQuestioner(QuestionerInterface):
             timeout_s=self.config["llm"]["llm_timeout_s"],
             retries=self.config["llm"]["llm_retries"],
         )
+
+        # Ground-truth note (env.py:135, not in the original spec): info["category"] is set on
+        # every reset() regardless of --description-type — use it instead of guessing obj.category
+        # from the description text. See parse.py's module docstring for the full rationale.
+        self.belief = parse.parse_description(self.target_description, info.get("category"), self.llm_client)
+
         self.priors = PriorsTable.load(
             _PACKAGE_ROOT / "artifacts" / "priors.json",
             default_disc=self.config["priors"]["default_disc"],
