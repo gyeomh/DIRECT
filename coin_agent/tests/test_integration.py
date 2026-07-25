@@ -17,13 +17,19 @@ import numpy as np
 
 from agent import adjudicate as adjudicate_mod
 from agent import extract as extract_mod
+from agent.llm import LLMCallFailed, LLMClient
 from agent.questioner import GraphQuestioner
 from agent.state import ObservationFrame, SlotValue
 
 IMG = np.zeros((8, 8, 3), dtype=np.uint8)
 
 
-def make_questioner(description="White cabinet standing against a light green wall", category="Cabinet"):
+def make_questioner(monkeypatch, description="White cabinet standing against a light green wall", category="Cabinet"):
+    # No vllm server is running in tests, and DESCRIPTION_PARSE_PROMPT now makes a real call
+    # inside __init__ (via parse_description) — fail it instantly instead of hitting a real
+    # (slow, doomed) network connection. This exercises the same degrade path as a genuinely
+    # unreachable server: belief keeps only obj.category.
+    monkeypatch.setattr(LLMClient, "call", lambda *a, **k: (_ for _ in ()).throw(LLMCallFailed("no server in tests")))
     info = {"task_image": "SHOULD_BE_DISCARDED", "target_description": description, "category": category}
     q = GraphQuestioner(info)
     q.reset_time()
@@ -43,11 +49,11 @@ def _assert_valid_action(action):
 
 
 def test_decisive_conflict_on_first_candidate(monkeypatch):
-    # parse.DESCRIPTION_PARSE_PROMPT isn't written yet (see parse.py TODO), so parse_description()
-    # only seeds obj.category from info["category"] — nothing else is derived from the description
-    # text yet. Seed obj.color_primary by hand here to simulate what that parse step will
-    # eventually produce, so there's something for the candidate frame to conflict with.
-    q = make_questioner()
+    # make_questioner() forces the description-parse LLM call to fail fast (no server in tests),
+    # so parse_description() only seeds obj.category here, same as a real degrade. Seed
+    # obj.color_primary by hand to simulate what a live DESCRIPTION_PARSE_PROMPT call would
+    # produce, so there's something for the candidate frame to conflict with.
+    q = make_questioner(monkeypatch)
     q.belief.set_slot(
         "obj.color_primary",
         SlotValue(raw="White cabinet", canon="white", confidence=1.0, certainty="resolved", provenance="description"),
@@ -67,7 +73,7 @@ def test_true_match_requires_three_questions(monkeypatch):
     # Three slots in three DIFFERENT regions (obj / ctx.above / room) so config.yaml's default
     # allow_bundle=true can't legitimately collapse two of them into one question — same-region
     # bundling is correct behavior (select.py), but it isn't what this scenario is testing.
-    q = make_questioner()
+    q = make_questioner(monkeypatch)
     frame = _frame(**{
         "obj.material": SlotValue(raw="oak", canon="oak", confidence=0.9, certainty="resolved"),
         "ctx.above.material": SlotValue(raw="granite", canon="granite", confidence=0.9, certainty="resolved"),
@@ -94,7 +100,7 @@ def test_true_match_requires_three_questions(monkeypatch):
 
 
 def test_hedged_answer_forces_adjudication(monkeypatch):
-    q = make_questioner()
+    q = make_questioner(monkeypatch)
     frame = _frame(**{
         "ctx.above.material": SlotValue(raw="granite", canon="granite", confidence=0.9, certainty="resolved"),
     })
@@ -114,7 +120,7 @@ def test_hedged_answer_forces_adjudication(monkeypatch):
 def test_never_returns_both_none_and_terminates(monkeypatch):
     monkeypatch.setattr(extract_mod, "extract", lambda *a, **k: ObservationFrame(image_hash="h"))
     monkeypatch.setattr(adjudicate_mod, "adjudicate", lambda *a, **k: (False, "no evidence", None))
-    q = make_questioner()
+    q = make_questioner(monkeypatch)
     action = q.ask_or_conclude(dict(image=IMG, answer=None))
     _assert_valid_action(action)
 
@@ -128,7 +134,7 @@ def test_extraction_failure_routes_to_adjudicate_not_blind_true(monkeypatch):
 
     monkeypatch.setattr(extract_mod, "extract", _raise)
     monkeypatch.setattr(adjudicate_mod, "adjudicate", lambda *a, **k: (False, "degraded: extraction failed", None))
-    q = make_questioner()
+    q = make_questioner(monkeypatch)
     action = q.ask_or_conclude(dict(image=IMG, answer=None))
     _assert_valid_action(action)
     assert action["conclusion"] == 0
