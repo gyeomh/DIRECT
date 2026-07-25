@@ -54,7 +54,9 @@ class GraphQuestioner(QuestionerInterface):
         # Ground-truth note (env.py:135, not in the original spec): info["category"] is set on
         # every reset() regardless of --description-type — use it instead of guessing obj.category
         # from the description text. See parse.py's module docstring for the full rationale.
-        self.belief = parse.parse_description(self.target_description, info.get("category"), self.llm_client)
+        self.belief = parse.parse_description(
+            self.target_description, info.get("category"), self.llm_client, self.max_adjacent,
+        )
 
         self.priors = PriorsTable.load(
             _PACKAGE_ROOT / "artifacts" / "priors.json",

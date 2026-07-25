@@ -129,6 +129,27 @@ def all_slot_keys(max_adjacent: int) -> list[str]:
     return list(SLOTS.keys()) + adjacent_slot_keys(max_adjacent) + contains_slot_keys(max_adjacent)
 
 
+def queryable_slot_keys(max_adjacent: int) -> list[str]:
+    """Slots actually worth asking a VLM about — everything `all_slot_keys` has, minus:
+    - Tier C (obj.style, obj.state, ctx.contains[i]): never decisive (compare.py), never queried
+      (select.py), never passed to the adjudicator (adjudicate.py) — zero consumers anywhere.
+    - obj.category: every candidate in an episode is guaranteed to share the target's category
+      (verified empirically — 0 mismatches across all 528 training distractors, filenames all
+      share the category prefix), and it's already known with full confidence from
+      info["category"] (parse.py). Re-asking a VLM to re-derive it per candidate is wasted
+      output tokens, and risks a spurious FAR conflict from pure phrasing (e.g. "wardrobe" vs
+      "closet") on a slot that's actually guaranteed to match.
+
+    Used by both extract.py's response_schema() (per candidate image) and parse.py's
+    DESCRIPTION_PARSE_PROMPT schema (once, from the description text) so the two prompts request
+    exactly the same vocabulary.
+    """
+    return [
+        k for k in all_slot_keys(max_adjacent)
+        if spec_for(k).tier != TIER_C and k != "obj.category"
+    ]
+
+
 def regions(max_adjacent: int) -> list[str]:
     """Distinct regions, in a stable order, for front-load coverage (§5.3)."""
     seen = []
