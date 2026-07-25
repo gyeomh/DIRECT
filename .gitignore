@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+images
+QA_eval/
+coin_agent/artifacts/cache/
+coin_agent/artifacts/priors.json
+.pytest_cache/

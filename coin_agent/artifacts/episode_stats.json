@@ -1,0 +1,141 @@
+{
+  "n_episodes": 167,
+  "n_tier_a_slots_total": 10,
+  "candidates_per_episode_distribution": {
+    "1": 45,
+    "2": 39,
+    "3": 16,
+    "4": 21,
+    "5": 19,
+    "6": 11,
+    "7": 16
+  },
+  "match_true_count_distribution": {
+    "1": 167
+  },
+  "match_true_position_distribution_AWARENESS_ONLY": {
+    "0": 45,
+    "1": 39,
+    "2": 16,
+    "3": 21,
+    "4": 19,
+    "5": 11,
+    "6": 16
+  },
+  "category_frequency": {
+    "kitchen cabinet": 4,
+    "desk": 4,
+    "kitchen lower cabinet": 4,
+    "bathroom cabinet": 4,
+    "chair": 4,
+    "wardrobe": 4,
+    "rack": 4,
+    "bed": 4,
+    "board": 4,
+    "armchair": 4,
+    "drawer": 4,
+    "bath towel": 4,
+    "couch": 4,
+    "piano": 4,
+    "sink cabinet": 4,
+    "bathtub": 4,
+    "countertop": 4,
+    "lamp stand": 4,
+    "microwave": 4,
+    "stove": 4,
+    "figure": 4,
+    "oven": 4,
+    "statue": 4,
+    "stair": 4,
+    "monitor": 4,
+    "cabinet": 3,
+    "table": 3,
+    "shelf": 3,
+    "tv": 3,
+    "book rack": 3,
+    "clock": 3,
+    "washing machine": 3,
+    "range hood": 3,
+    "sink": 3,
+    "carpet": 3,
+    "bench": 3,
+    "balustrade": 3,
+    "umbrella": 3,
+    "ladder": 3,
+    "flower vase": 3,
+    "refrigerator": 3,
+    "vase": 3,
+    "display cabinet": 3,
+    "heater": 3,
+    "blanket": 2,
+    "cloth": 2,
+    "shower cabin": 2,
+    "cooker": 2,
+    "clothes": 1,
+    "sofa chair": 1
+  },
+  "description_length_words": {
+    "category": {
+      "mean": 1.28,
+      "min": 1,
+      "max": 3
+    },
+    "color": {
+      "mean": 2.96,
+      "min": 2,
+      "max": 5
+    },
+    "context": {
+      "mean": 6.62,
+      "min": 4,
+      "max": 11
+    },
+    "color_context_feature": {
+      "mean": 9.89,
+      "min": 6,
+      "max": 14
+    },
+    "color_feature": {
+      "mean": 5.93,
+      "min": 3,
+      "max": 10
+    },
+    "color_context": {
+      "mean": 7.85,
+      "min": 5,
+      "max": 12
+    }
+  },
+  "tier_a_slots_mentioned_heuristic": {
+    "category": {
+      "mean": 1.16,
+      "min": 1,
+      "max": 4
+    },
+    "color": {
+      "mean": 3.3,
+      "min": 1,
+      "max": 7
+    },
+    "context": {
+      "mean": 2.11,
+      "min": 1,
+      "max": 6
+    },
+    "color_context_feature": {
+      "mean": 4.06,
+      "min": 2,
+      "max": 8
+    },
+    "color_feature": {
+      "mean": 3.86,
+      "min": 1,
+      "max": 7
+    },
+    "color_context": {
+      "mean": 3.58,
+      "min": 2,
+      "max": 8
+    }
+  }
+}

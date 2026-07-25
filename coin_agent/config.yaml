@@ -1,0 +1,85 @@
+# coin_agent config — every [CONFIG] knob from graph_method/coin_questioner_spec.md lives here.
+# Nothing in agent/ should hardcode a tunable value; import this file via agent/questioner.py instead.
+
+vllm:
+  # Model id served by `vllm serve <model_id> ...`. Must match the running server exactly.
+  # TODO(together): pin the exact Qwen checkpoint once we've picked/tested one (spec §2 says
+  # "default a Qwen3-VL checkpoint"). Overridable via env LOCAL_VLM_MODEL_ID.
+  model_id: "Qwen/Qwen2.5-VL-32B-Instruct"
+  port: 8000
+  temperature: 0.0
+  extraction_temperature_self_consistency: 0.7   # only used when extract_self_consistency_k > 1
+
+schema:
+  max_adjacent: 3                    # §3.1 ctx.adjacent[i] — cap on adjacent-object slots
+
+comparison:
+  tau_obs: 0.80                      # §5.2 — min frame.confidence for a slot to be CONFLICT-eligible
+  weak_conflicts_for_decisive: null  # §5.2 — off by default; set to an int (e.g. 3) only if ablation A4 shows it helps
+
+extraction:
+  extract_self_consistency_k: 1      # §5.1 — keep at 1; K>1 only affordable on candidate #1, and only if enabled explicitly
+
+selection:
+  allow_bundle: true                 # §5.3 — bundle at most 2 same-region slots per question
+  max_bundle_slots: 2
+  tier_weight:
+    A: 1.0
+    B: 0.6
+  # Per-slot lighting/viewpoint stability weight used in the select.py scoring formula.
+  # 1.0 = fully stable across re-photographs, lower = more lighting/viewpoint sensitive.
+  # Values are a first-pass estimate (data, not code — tune via ablate.py); §0's own commentary
+  # is the source for room.floor_material (very stable) and *.color (lighting-sensitive).
+  stability:
+    obj.category: 1.0
+    obj.color_primary: 0.75
+    obj.color_secondary: 0.7
+    obj.material: 0.9
+    obj.hardware_type: 0.9
+    obj.hardware_finish: 0.85
+    obj.state: 0.3
+    obj.style: 0.6
+    obj.count: 0.9
+    ctx.above.object: 0.9
+    ctx.above.material: 0.95
+    ctx.above.color: 0.7
+    ctx.support.object: 0.9
+    ctx.adjacent.object: 0.7
+    ctx.adjacent.color: 0.6
+    ctx.contains: 0.3
+    room.type: 0.95
+    room.floor_material: 0.95
+    room.floor_color: 0.65
+    room.wall_color: 0.6
+    room.window_present: 0.8
+    room.notable_appliance: 0.85
+
+front_load:
+  # §5.3 — override ranking on early candidates to prefer maximum region coverage.
+  # Keys are candidates_seen (0-indexed); "default" applies past the last explicit key.
+  weights:
+    0: 2.0
+    1: 1.0
+    default: 0.8
+
+budget:
+  assumed_n_candidates: 8            # §5.5 — conservative estimate (example episodes have 6)
+  hard_cap_per_image: 6
+  soft_time_frac: 0.60               # of _MAX_TIME_ALLOWED (600s)
+  hard_time_frac: 0.85
+  max_truncation_rate: 0.02          # blocking-bug threshold, checked by scripts/run_eval.py
+
+priors:
+  prior_alpha: 1.0                   # Laplace smoothing in build_priors.py
+  default_disc: 0.5                  # fallback for unseen (category, slot) pairs
+
+llm:
+  llm_timeout_s: 20
+  llm_retries: 1
+  cache_dir: "artifacts/cache"
+
+eval:
+  min_eval_episodes: 100             # never tune on fewer episodes than this (§0.7.3)
+
+logging:
+  trace_dir: "artifacts/traces"      # (description, image, qa_history) -> (motivation, score, question) rows for eventual SFT (§11)
