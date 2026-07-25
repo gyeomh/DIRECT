@@ -4,10 +4,11 @@ The slot frame is deliberately withheld here — it exists only to propose and r
 The actual conclusion comes from a VLM looking at the real candidate image plus the belief
 rendered as prose, so a slot-extraction error costs a wasted question, never a wrong conclusion.
 
-`ADJUDICATION_PROMPT` is the second prompt we're writing together (after extract.py's). For
-reference, `Questioner.py:QUESTIONER_EXAMPLE_PROMPT` is the organizers' own single-call baseline
-and already uses the same `<motivation>/<score>/<question>` output format this module parses —
-worth reusing its phrasing conventions rather than inventing a new format from scratch.
+Unlike extract.py, this prompt is NOT description-blind — the whole point of this call is to
+compare the candidate against the target concept, so it names "the target" freely. Reuses the
+organizers' own `<motivation>/<score>` format (`Questioner.py:QUESTIONER_EXAMPLE_PROMPT`) minus
+the `<question>` tag — this is a terminal call (budget already decided no more questions get
+asked), so there's nothing to ask.
 """
 
 import re
@@ -15,10 +16,32 @@ import re
 from .llm import LLMClient, LLMCallFailed
 from .state import TargetBelief
 
-# TODO(together): write this. Must ask for exactly <motivation>...</motivation><score>0|1|2</score>,
-# motivation under 60 words with no double quotes, and must pass belief.render_text() + the
-# description + qa_history_text — but NOT the slot frame (see module docstring).
-ADJUDICATION_PROMPT = None
+ADJUDICATION_PROMPT = """You are deciding whether the object shown in this image is the same \
+specific object as a target object described below, which you have not seen directly.
+
+Target description: "{description}"
+
+Additional confirmed facts about the target (from the description, or from questions already \
+asked and answered by an oracle who has seen the target directly):
+{belief_text}
+
+Questions already asked and their answers:
+{qa_history}
+
+Look at the image above. Compare what you actually see in it against the description and the \
+confirmed facts. Candidates are often near-duplicates that differ only in a few details (color, \
+material, a nearby object, the room) — a single concrete, confirmed mismatch on any of these \
+means this is NOT the same object, even if everything else matches. Ignore compression \
+artifacts, digital noise, or rendering glitches entirely — never treat them as a real difference.
+
+Provide your reasoning, then a score:
+- 2 if you are confident this is the same specific object as the target.
+- 0 if you are confident this is NOT the same object (something concretely conflicts).
+- 1 if you are genuinely unsure either way.
+
+Strictly follow this output format: <motivation>your reasoning here, under 60 words, do NOT use \
+double quotes</motivation><score>0, 1, or 2</score>
+"""
 
 _RESPONSE_RE = re.compile(
     r"<motivation>(?P<motivation>.*?)</motivation>\s*<score>(?P<score>[012])</score>",
@@ -51,14 +74,30 @@ def score_to_conclusion(score: int) -> bool:
 
 
 def qa_history_text(belief: TargetBelief) -> str:
+    """A bundled question (select.py bundles ≤2 same-region slots into one question) is recorded
+    once per slot in `belief.asked` — same question text, different slot_key — since one oracle
+    answer resolves both. Dedupe by question text so a bundled Q&A doesn't print twice.
+    """
     if not belief.asked:
         return "(no questions asked yet)"
+    seen_questions: set[str] = set()
     lines = []
     for slot_key, question in belief.asked:
+        if question in seen_questions:
+            continue
+        seen_questions.add(question)
         value = belief.get(slot_key)
         answer = value.raw if value.raw is not None else "(no answer recorded)"
         lines.append(f"Q: {question}\nA: {answer}")
     return "\n".join(lines)
+
+
+def _build_adjudication_prompt(belief: TargetBelief) -> str:
+    return ADJUDICATION_PROMPT.format(
+        description=belief.description,
+        belief_text=belief.render_text(),
+        qa_history=qa_history_text(belief),
+    )
 
 
 def adjudicate(
@@ -74,16 +113,7 @@ def adjudicate(
     if skip_call:
         return False, "Hard time budget exceeded before adjudication could run.", "hard_time_budget"
 
-    if ADJUDICATION_PROMPT is None:
-        raise NotImplementedError(
-            "adjudicate.ADJUDICATION_PROMPT is not written yet — see the module docstring TODO."
-        )
-
-    base_prompt = ADJUDICATION_PROMPT.format(
-        description=belief.description,
-        belief_text=belief.render_text(),
-        qa_history=qa_history_text(belief),
-    )
+    base_prompt = _build_adjudication_prompt(belief)
 
     for attempt_prompt, fallback_tag in ((base_prompt, None), (base_prompt + _STRICT_RETRY_SUFFIX, "retry_parse")):
         try:
