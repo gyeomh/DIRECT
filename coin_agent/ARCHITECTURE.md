@@ -40,13 +40,13 @@ never overwritten, only ever added to.
 | `schema.py` | Slot ontology: 22 slots (10 indexed `ctx.adjacent[i]`/`ctx.contains[i]` expand to more), each with a type, a Tier (A/B/C), and a region (used for front-load coverage + question bundling). |
 | `canon.py` | Synonym normalization (`"navy blue"` → `navy`) and `SAME`/`NEAR`/`FAR` confusability tables. Only `FAR` can produce a decisive conflict. |
 | `state.py` | `SlotValue`, `TargetBelief`, `ObservationFrame`. Enforces the monotonicity invariant. |
-| `parse.py` | Text → `SlotValue`: oracle-answer hedge detection (`"maybe navy"` → hedged, never decisive) and the initial description parse (currently only `obj.category`, seeded from `info["category"]` — see below). |
+| `parse.py` | Text → `SlotValue`: oracle-answer hedge detection (`"maybe navy"` → hedged, never decisive) and the initial description parse — one text-only Qwen call seeding everything `target_description` states (plus `obj.category` from `info["category"]`, no LLM needed for that one) into the belief before any candidate image is seen. |
 | `compare.py` | Per-slot `MATCH / WEAK_CONFLICT / CONFLICT / UNKNOWN / INCOMPARABLE` classification. A `CONFLICT` requires Tier A + resolved belief + confident observation + `FAR` relation. |
 | `select.py` | Which unresolved slot is worth asking about (score = frame confidence × discriminativeness × tier weight × stability), front-loads region coverage on candidate #1, bundles ≤2 same-region slots, and renders the oracle-facing wh-question. |
 | `budget.py` | `BudgetController` — per-candidate question cap derived from steps/time remaining, reserving one conclusion step per estimated remaining candidate; soft/hard time stops. |
 | `priors.py` | Runtime lookup for `disc(slot, value, category)` from `artifacts/priors.json` (built offline by `scripts/build_priors.py`). |
-| `extract.py` | Candidate image → `ObservationFrame` via one Qwen VLM call (optionally self-consistency-voted on candidate #1). **`EXTRACTION_PROMPT` not written yet.** |
-| `adjudicate.py` | Final match/no-match call: image + belief text + description + Q/A history (never the slot frame) → `<motivation><score>`. **`ADJUDICATION_PROMPT` not written yet.** |
+| `extract.py` | Candidate image → `ObservationFrame` via one Qwen VLM call (optionally self-consistency-voted on candidate #1). Confidence is the model's self-reported `visibility` alone for now — real per-token logprob slicing is a documented v2 addition, not faked in. |
+| `adjudicate.py` | Final match/no-match call: image + belief text + description + Q/A history (never the slot frame) → `<motivation><score>`. **`ADJUDICATION_PROMPT` not written yet — the one remaining prompt.** |
 | `llm.py` | Cached, timed, retrying wrapper around `utils.ClientBasedLLM` (the vllm/Qwen client). Everything else calls the VLM only through here. |
 | `questioner.py` | `GraphQuestioner(QuestionerInterface)` — wires all of the above into the loop above. The only place allowed to touch (and discard) `info["task_image"]`. |
 
@@ -54,10 +54,12 @@ never overwritten, only ever added to.
 
 - `env.py:135` sets `info["category"]` on every `reset()` regardless of `--description-type` — `obj.category` is seeded from this directly rather than guessed from the description text.
 - Empirically confirmed via `scripts/analyze_episodes.py`: in all 167 training episodes, the `match=True` candidate is the last one in the distractor list. Never condition on this (per spec §0.6) — the held-out set is regenerated.
+- Empirically confirmed via a quick script over `episodes_train.jsonl`: every one of the 528 training distractors shares its filename's category prefix with the episode's target category — 0 mismatches. So `obj.category` never needs re-extraction per candidate either; `schema.queryable_slot_keys()` excludes it (and all Tier-C slots, which have zero consumers anywhere in compare/select/adjudicate) from both `extract.py`'s and `parse.py`'s VLM prompts.
 
 ## What's stubbed vs. real
 
-- **Real, tested now (53 passing tests):** `schema`, `canon`, `state`, `compare`, `select`, `budget`, `parse` (oracle-answer path), `llm`, `questioner` orchestration (tested via monkeypatched `extract`/`adjudicate`).
-- **Structurally wired, waiting on a prompt:** `extract.EXTRACTION_PROMPT`, `adjudicate.ADJUDICATION_PROMPT`, `parse.DESCRIPTION_PARSE_PROMPT` — see the conversation for current priority (extraction first).
+- **Real, tested now (73 passing tests):** `schema`, `canon`, `state`, `compare`, `select`, `budget`, `parse` (both the oracle-answer path and the description-parse prompt), `extract` (prompt written, confidence math fixed — see below), `llm`, `questioner` orchestration (integration tests use monkeypatched `extract`/`adjudicate` to stay network-free).
+- **Structurally wired, waiting on a prompt:** `adjudicate.ADJUDICATION_PROMPT` — the one remaining piece.
+- **A real bug caught and fixed while writing `EXTRACTION_PROMPT`:** confidence used to multiply the visibility factor by a placeholder logprob value of 0.5 (since real per-token logprob slicing isn't implemented yet), which meant even a `"clear"` observation computed confidence `0.5 × 1.0 = 0.5` — below the default `tau_obs=0.80` — silently failing every slot's confidence check with no visible error. Fixed: confidence is the visibility factor alone until logprob slicing is a real v2 addition (`tests/test_extract.py::test_clear_visibility_meets_default_tau_obs` is the regression test).
 - **CLI stubs (logic depends on the above):** `scripts/build_priors.py`, `scripts/run_eval.py`, `scripts/ablate.py`.
 - **Runtime-only patches, upstream files untouched:** `patches/` — see `patches/README.md`.

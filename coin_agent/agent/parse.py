@@ -126,15 +126,9 @@ def parse_oracle_answer(raw_answer: str, slot_key: str, question: str) -> SlotVa
 # The one text-only LLM call that reads target_description and seeds everything it states into
 # the belief BEFORE any candidate image is seen — this is what makes candidate_pool()'s "not
 # implied by the description" filter and budget.ambiguity_allowance actually mean something.
-# obj.category is handled separately (info["category"], see module docstring) and Tier-C slots
-# (obj.style, obj.state, ctx.contains) are deliberately excluded — they're never decisive and
-# never queried (schema.py §3.2), so parsing them here would be pure overhead with no downstream
-# use. Only the *first* adjacent object/color is requested (ctx.adjacent[0].*) since every example
-# description in this dataset mentions at most one adjacent object.
-
-_DESCRIPTION_SLOT_KEYS = [
-    k for k in schema.SLOTS if k != "obj.category" and schema.spec_for(k).tier != schema.TIER_C
-] + ["ctx.adjacent[0].object", "ctx.adjacent[0].color"]
+# Uses schema.queryable_slot_keys() — the same vocabulary extract.py's per-candidate VLM call
+# uses (obj.category and Tier-C slots excluded; see that function's docstring for why) — so a
+# slot behaves identically regardless of whether it came from the description or a candidate image.
 
 NOT_MENTIONED = "not_mentioned"
 
@@ -177,8 +171,10 @@ Return ONLY strict JSON, no other text, with exactly these keys and no others:
 """
 
 
-def _build_description_prompt(description: str) -> str:
-    schema_keys_skeleton = json.dumps({k: NOT_MENTIONED for k in _DESCRIPTION_SLOT_KEYS}, indent=2)
+def _build_description_prompt(description: str, max_adjacent: int) -> str:
+    schema_keys_skeleton = json.dumps(
+        {k: NOT_MENTIONED for k in schema.queryable_slot_keys(max_adjacent)}, indent=2,
+    )
     return DESCRIPTION_PARSE_PROMPT.format(
         description=description, not_mentioned=NOT_MENTIONED, schema_keys=schema_keys_skeleton,
     )
@@ -204,14 +200,14 @@ def _slot_value_from_description_field(slot_key: str, raw_value) -> SlotValue | 
     )
 
 
-def parse_description_llm_response(text: str) -> dict[str, SlotValue]:
+def parse_description_llm_response(text: str, max_adjacent: int) -> dict[str, SlotValue]:
     """Raises ExtractionParseError (via _extract_json) on malformed JSON — caller degrades by
     keeping whatever was already seeded from info["category"], per this module's docstring: a
     missing/failed description parse costs a few wasted early questions, not a correctness bug.
     """
     parsed = _extract_json(text)
     slots = {}
-    for slot_key in _DESCRIPTION_SLOT_KEYS:
+    for slot_key in schema.queryable_slot_keys(max_adjacent):
         value = _slot_value_from_description_field(slot_key, parsed.get(slot_key))
         if value is not None:
             slots[slot_key] = value
@@ -232,6 +228,7 @@ def _category_fallback(description: str) -> str | None:
 
 def parse_description(
     description: str, info_category: str | None = None, llm_client: LLMClient | None = None,
+    max_adjacent: int = 3,
 ) -> TargetBelief:
     belief = TargetBelief(description=description, noun_phrase=(info_category or description))
 
@@ -250,8 +247,8 @@ def parse_description(
 
     if llm_client is not None:
         try:
-            result = llm_client.call(_build_description_prompt(description), temperature=0.0)
-            for slot_key, value in parse_description_llm_response(result.text).items():
+            result = llm_client.call(_build_description_prompt(description, max_adjacent), temperature=0.0)
+            for slot_key, value in parse_description_llm_response(result.text, max_adjacent).items():
                 belief.set_slot(slot_key, value)
         except (LLMCallFailed, ExtractionParseError):
             pass  # degrade: belief keeps only obj.category, same as a plain "category" description

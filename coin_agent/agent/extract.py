@@ -1,10 +1,6 @@
 """Candidate image -> ObservationFrame via the Qwen VLM (spec §5.1).
 
-The prompt itself (`EXTRACTION_PROMPT`) is the first thing we're writing together next — see the
-TODO below. Everything else here (the requested JSON shape, confidence combination, self-
-consistency voting) is fully wired so that dropping in the prompt text is the only remaining step.
-
-Hard requirements the prompt must satisfy (spec §5.1, non-negotiable regardless of wording):
+Hard requirements this prompt satisfies (spec §5.1, non-negotiable regardless of wording):
   - strict JSON matching `response_schema(max_adjacent)` below;
   - an explicit "unclear" option on every field;
   - a per-field self-reported `visibility` in {clear, partial, not_visible};
@@ -12,21 +8,51 @@ Hard requirements the prompt must satisfy (spec §5.1, non-negotiable regardless
     call must not be biased toward confirming what the description says (that bias is exactly
     what compare.py relies on *not* existing);
   - explicit instruction to ignore digital artifacts/distortions and never report them as content.
+
+Same bare-noun / color-split-out convention as parse.py's DESCRIPTION_PARSE_PROMPT, and the same
+`schema.queryable_slot_keys()` vocabulary — so a slot means the same thing whether it came from
+the description or from a candidate image (obj.category and Tier-C slots excluded from both, see
+that function's docstring).
 """
 
 import json
-import math
 
 from . import canon, schema
 from .llm import LLMClient, LLMCallFailed, _image_hash
 from .state import ObservationFrame, SlotValue
 
-# TODO(together): write this. Must satisfy every bullet in the module docstring above.
-EXTRACTION_PROMPT = None
+UNCLEAR = "unclear"
+
+EXTRACTION_PROMPT = """Look closely at the image and report exactly what you can observe about \
+the single main object in it and its immediate surroundings.
+
+Describe only what is visible in THIS image. Do not reference any other image, any description, \
+or what this kind of object usually looks like elsewhere — report only what you can actually see \
+here.
+
+For every field below, provide:
+- "value": a short, literal, lowercase phrase for what you observe, or exactly "{unclear}" if you \
+cannot determine it from this image.
+- "visibility": "clear" if you can confidently observe it, "partial" if it is partially visible, \
+occluded, or ambiguous, "not_visible" if it is not visible in this image at all.
+
+Rules:
+- Ignore compression artifacts, digital noise, rendering glitches, or watermarks entirely — never \
+report them as real content.
+- Object-name fields (ctx.above.object, ctx.support.object, ctx.adjacent[i].object, \
+room.notable_appliance) must be a single bare noun with no adjectives — "doorway", not "open \
+doorway"; "picture", not "black framed picture". Put color/material in the matching separate \
+field instead of folding it into the noun.
+- If a relation genuinely doesn't apply to this scene (e.g. there is no adjacent object at all), \
+set its value to "{unclear}" and its visibility to "not_visible" — do not invent one.
+
+Return ONLY strict JSON, no other text, with exactly these keys and no others, each an object \
+with "value" and "visibility":
+{schema_json}
+"""
 
 VISIBILITY_VALUES = ("clear", "partial", "not_visible")
 _VISIBILITY_FACTOR = {"clear": 1.0, "partial": 0.5, "not_visible": 0.0}
-UNCLEAR = "unclear"
 
 
 class ExtractionParseError(RuntimeError):
@@ -35,9 +61,12 @@ class ExtractionParseError(RuntimeError):
 
 def response_schema(max_adjacent: int) -> dict:
     """JSON schema requested from the model: one object per slot key, each with a raw text
-    `value` (or the literal "unclear") and a self-reported `visibility`.
+    `value` (or the literal "unclear") and a self-reported `visibility`. Uses
+    `schema.queryable_slot_keys` — obj.category and Tier-C slots are excluded (see that
+    function's docstring: every candidate is guaranteed to be the target's category, and Tier-C
+    slots have no consumer anywhere in compare/select/adjudicate).
     """
-    slot_keys = schema.all_slot_keys(max_adjacent)
+    slot_keys = schema.queryable_slot_keys(max_adjacent)
     return {
         "type": "object",
         "properties": {
@@ -70,18 +99,16 @@ def _extract_json(text: str) -> dict:
         raise ExtractionParseError(f"Model did not return valid JSON: {e}\n---\n{text}") from e
 
 
-def _logprob_confidence(token_logprobs: list[float] | None) -> float:
-    """Mean token logprob of the value tokens, mapped through a sigmoid (spec §5.1). Falls back
-    to a neutral 0.5 when the server didn't return logprobs (e.g. `want_logprobs=False`, or a
-    backend that doesn't support it) rather than silently pretending to be confident.
+def _slot_value_from_field(slot_key: str, field: dict, logprob_conf: float | None = None) -> SlotValue:
+    """`logprob_conf=None` means "no real per-token logprob signal available" — confidence is
+    then the model's self-reported `visibility` alone, NOT multiplied by a placeholder. Spec
+    §5.1's mean-token-logprob signal is a real v2 addition (needs slicing result.logprobs to the
+    exact token span of each field's "value" string, which depends on the prompt's exact JSON
+    layout — worth doing once we've validated the visibility-only signal isn't already sufficient,
+    per the same "test rather than assume" spirit as the ablation ladder). Multiplying in a fake
+    neutral 0.5 here instead of skipping it would silently fail every slot below tau_obs (0.80
+    default) — including "clear" ones — with no visible error; caught while wiring this up.
     """
-    if not token_logprobs:
-        return 0.5
-    mean_lp = sum(token_logprobs) / len(token_logprobs)
-    return 1.0 / (1.0 + math.exp(-mean_lp))
-
-
-def _slot_value_from_field(slot_key: str, field: dict, logprob_conf: float) -> SlotValue:
     raw = field.get("value")
     visibility = field.get("visibility", "not_visible")
     vis_factor = _VISIBILITY_FACTOR.get(visibility, 0.0)
@@ -91,17 +118,17 @@ def _slot_value_from_field(slot_key: str, field: dict, logprob_conf: float) -> S
 
     value_type = schema.spec_for(slot_key).type
     canon_value = canon.normalize(raw, value_type)
-    confidence = logprob_conf * vis_factor
+    confidence = vis_factor if logprob_conf is None else vis_factor * logprob_conf
     if canon_value is None:
         return SlotValue(raw=raw, canon=None, confidence=confidence, certainty="unknown", provenance=None)
     return SlotValue(raw=raw, canon=canon_value, confidence=confidence, certainty="resolved", provenance=None)
 
 
-def _build_frame(image_hash: str, parsed: dict, per_slot_logprob_conf: dict, max_adjacent: int) -> ObservationFrame:
+def _build_frame(image_hash: str, parsed: dict, max_adjacent: int) -> ObservationFrame:
     frame = ObservationFrame(image_hash=image_hash)
-    for slot_key in schema.all_slot_keys(max_adjacent):
+    for slot_key in schema.queryable_slot_keys(max_adjacent):
         field = parsed.get(slot_key, {"value": None, "visibility": "not_visible"})
-        frame.slots[slot_key] = _slot_value_from_field(slot_key, field, per_slot_logprob_conf.get(slot_key, 0.5))
+        frame.slots[slot_key] = _slot_value_from_field(slot_key, field)
     return frame
 
 
@@ -113,7 +140,7 @@ def _majority_vote(frames: list[ObservationFrame], max_adjacent: int) -> Observa
     assert frames, "majority_vote requires at least one sample"
     merged = ObservationFrame(image_hash=frames[0].image_hash)
     k = len(frames)
-    for slot_key in schema.all_slot_keys(max_adjacent):
+    for slot_key in schema.queryable_slot_keys(max_adjacent):
         votes = [f.slots[slot_key] for f in frames]
         resolved_votes = [v for v in votes if v.canon is not None]
         if not resolved_votes:
@@ -131,6 +158,14 @@ def _majority_vote(frames: list[ObservationFrame], max_adjacent: int) -> Observa
     return merged
 
 
+def _build_extraction_prompt(max_adjacent: int) -> str:
+    schema_json = json.dumps(
+        {k: {"value": UNCLEAR, "visibility": "not_visible"} for k in schema.queryable_slot_keys(max_adjacent)},
+        indent=2,
+    )
+    return EXTRACTION_PROMPT.format(unclear=UNCLEAR, schema_json=schema_json)
+
+
 def extract(
     image,
     llm_client: LLMClient,
@@ -139,28 +174,20 @@ def extract(
     self_consistency_k: int = 1,
     self_consistency_temperature: float = 0.7,
 ) -> ObservationFrame:
-    if EXTRACTION_PROMPT is None:
-        raise NotImplementedError(
-            "extract.EXTRACTION_PROMPT is not written yet — see the module docstring TODO."
-        )
-
     image_hash = _image_hash(image)
+    prompt = _build_extraction_prompt(max_adjacent)
     k = max(1, self_consistency_k)
     frames = []
     for i in range(k):
         temp = 0.0 if k == 1 else self_consistency_temperature
         try:
-            result = llm_client.call(EXTRACTION_PROMPT, image, temperature=temp, want_logprobs=True)
+            result = llm_client.call(prompt, image, temperature=temp, want_logprobs=True)
         except LLMCallFailed:
             if frames:
                 break  # degrade to majority over whatever samples we did get
             raise
         parsed = _extract_json(result.text)
-        per_slot_conf = {
-            key: _logprob_confidence(None)  # TODO(together): slice result.logprobs per value-token span once the prompt's token layout is fixed
-            for key in schema.all_slot_keys(max_adjacent)
-        }
-        frames.append(_build_frame(image_hash, parsed, per_slot_conf, max_adjacent))
+        frames.append(_build_frame(image_hash, parsed, max_adjacent))
 
     if len(frames) == 1:
         return frames[0]
