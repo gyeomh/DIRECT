@@ -1,7 +1,7 @@
 import json
 
 from agent import schema
-from agent.parse import NOT_MENTIONED, parse_description, parse_description_llm_response
+from agent.parse import NOT_MENTIONED, _clean_free_text, parse_description, parse_description_llm_response, parse_oracle_answer
 from agent.llm import LLMCallFailed, LLMClient, LLMResult
 
 MAX_ADJACENT = 3
@@ -99,3 +99,29 @@ def test_parse_description_without_llm_client_only_seeds_category():
     belief = parse_description("White clock hanging on a wall", info_category="Clock", llm_client=None)
     assert belief.get("obj.category").canon == "clock"
     assert belief.get("obj.color_primary").canon is None
+
+
+def test_clean_free_text_extracts_head_noun_from_verbose_oracle_answer():
+    """Regression test for a real false conclusion hit during a live run against Qwen3-VL:
+    the oracle answered "What object sits directly above the cabinet?" with the full descriptive
+    "A painting of a girl on a swing, flowers, and butterflies." — the un-reduced clause used to
+    become the belief's ctx.above.object value outright, wildly different from extract()'s bare
+    "picture" for the same real object. Reduced to the head noun instead.
+    """
+    assert _clean_free_text("A painting of a girl on a swing, flowers, and butterflies.") == "painting"
+    assert _clean_free_text("The surface is a white tile backsplash.") == "white tile backsplash"
+
+
+def test_clean_free_text_still_handles_simple_answers():
+    assert _clean_free_text("It's a lamp.") == "lamp"
+    assert _clean_free_text("A coffee maker.") == "coffee maker"
+
+
+def test_parse_oracle_answer_free_text_slot_uses_head_noun():
+    value = parse_oracle_answer(
+        "A painting of a girl on a swing, flowers, and butterflies.",
+        "ctx.above.object", "What object sits directly above the cabinet?",
+    )
+    assert value.canon == "painting"
+    assert value.certainty == "resolved"
+    assert value.provenance == "oracle"
