@@ -61,14 +61,24 @@ def compare_slot(slot_key: str, frame_value, belief_value, tau_obs: float) -> st
 
     value_type = _slot_type(slot_key)
     if value_type not in schema.VOCAB:
-        # Free-text slots (ctx.above.object, ctx.support.object, obj.style, ...) have no synonym
-        # table, so there's no NEAR cluster to fall back on: two different noun strings are
-        # treated as FAR outright. This matters because ctx.above.object / ctx.support.object are
-        # Tier A specifically for their stability (§3.2) — if mismatches here only ever produced
-        # NEAR, those slots could never be decisive despite being curated as decisive-eligible.
-        # The risk this trades in is false conflicts from paraphrase ("counter" vs "countertop");
-        # test rather than assume (ablate.py) once real extractions are available.
-        rel = canon.SAME if frame_value.canon == belief_value.canon else canon.FAR
+        # Free-text slots (ctx.above.object, ctx.support.object, ...) have no synonym table, so
+        # a differing string is treated as NEAR (never decisive alone), not FAR. This WAS tried
+        # as FAR — the reasoning being that ctx.above.object/ctx.support.object are Tier A
+        # specifically for their stability (§3.2), and NEAR-only would make them never decisive
+        # despite being curated as decisive-eligible — but a live run against the real Qwen3-VL
+        # model surfaced a concrete false conflict from it on the very first test episode:
+        # extract() correctly said "picture" (bare noun, as EXTRACTION_PROMPT requires), while
+        # the oracle's answer to "what sits above it?" was the verbose "a painting of a girl on
+        # a swing, flowers, and butterflies" — parse.py's _clean_free_text reduces that to "a
+        # painting of a girl on a swing" (unrelated bug, fixed separately), which is a different
+        # string from "picture" regardless, since "picture"/"painting" have no synonym table.
+        # That single false FAR flipped a correct match to a wrong conclusion (n_successes 0/1
+        # on an episode with exactly one, matching candidate). Free-text nouns are open-vocabulary
+        # with no bounded synonym set the way colors/materials have, so — tested, not assumed,
+        # per spec §8's own philosophy — the risk of fabricated conflicts outweighs the benefit
+        # of these slots being independently decisive. They remain Tier A for question-selection
+        # purposes (front-loading, high info value) and still feed the adjudicator's belief text.
+        rel = canon.SAME if frame_value.canon == belief_value.canon else canon.NEAR
     else:
         rel = canon.relation(value_type, frame_value.canon, belief_value.canon)
 

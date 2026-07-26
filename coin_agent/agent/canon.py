@@ -44,8 +44,18 @@ _COLOR_SYNONYMS = {
     "pink": "pink", "rose": "pink", "blush": "pink",
     "gold": "gold", "golden": "gold",
     "silver": "silver", "metallic silver": "silver",
-    "multicolor": "multicolor", "multi-colored": "multicolor", "patterned": "multicolor",
+    "multicolor": "multicolor", "multi-colored": "multicolor", "multicolored": "multicolor",
+    "multi-color": "multicolor", "multicoloured": "multicolor", "patterned": "multicolor",
 }
+
+# Live-model regression test (Qwen3-VL-30B-A3B-Instruct via vllm) surfaced this: the model
+# correctly said "light green" / "dark red" / "pale yellow" for real dataset descriptions, but
+# _COLOR_SYNONYMS only enumerates a handful of specific "modifier + color" phrases (e.g. "light
+# blue", "dark grey") — every other modifier+color combination silently failed to normalize,
+# discarding a genuinely correct extraction. Enumerating every combination is unbounded; instead,
+# strip a leading modifier and retry against the base color once, in both normalize() and
+# find_in_text().
+_COLOR_MODIFIERS = ("light", "dark", "pale", "deep", "bright", "muted", "soft", "vivid", "dull")
 
 _MATERIAL_SYNONYMS = {
     "painted": "painted", "painted wood": "painted",
@@ -131,7 +141,15 @@ def normalize(raw: str | None, value_type: str) -> str | None:
         return None
     if value_type not in _SYNONYMS_BY_TYPE:
         return _key(raw) if value_type == "str" else raw
-    return _SYNONYMS_BY_TYPE[value_type].get(_key(raw))
+    key = _key(raw)
+    hit = _SYNONYMS_BY_TYPE[value_type].get(key)
+    if hit is not None:
+        return hit
+    if value_type == "COLOR":
+        for modifier in _COLOR_MODIFIERS:
+            if key.startswith(modifier + " "):
+                return _COLOR_SYNONYMS.get(key[len(modifier) + 1:])
+    return None
 
 
 def find_in_text(text: str | None, value_type: str) -> str | None:
@@ -149,6 +167,11 @@ def find_in_text(text: str | None, value_type: str) -> str | None:
     for phrase in sorted(synonyms.keys(), key=len, reverse=True):
         if re.search(rf"\b{re.escape(phrase)}\b", hay):
             return synonyms[phrase]
+    if value_type == "COLOR":
+        for modifier in _COLOR_MODIFIERS:
+            m = re.search(rf"\b{modifier}\s+(\w+)\b", hay)
+            if m and m.group(1) in _COLOR_SYNONYMS:
+                return _COLOR_SYNONYMS[m.group(1)]
     return None
 
 

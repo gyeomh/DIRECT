@@ -3,9 +3,10 @@
 
 vllm:
   # Model id served by `vllm serve <model_id> ...`. Must match the running server exactly.
-  # TODO(together): pin the exact Qwen checkpoint once we've picked/tested one (spec §2 says
-  # "default a Qwen3-VL checkpoint"). Overridable via env LOCAL_VLM_MODEL_ID.
-  model_id: "Qwen/Qwen2.5-VL-32B-Instruct"
+  # Confirmed working: vllm==0.15.0 (pins torch==2.9.1, whose default PyPI build is +cu128 —
+  # needed on drivers capped at CUDA 12.8; vllm>=0.2x's default wheel requires CUDA 13 and
+  # will not run on such drivers). Served via `CUDA_VISIBLE_DEVICES=<gpu> vllm serve ...`.
+  model_id: "Qwen/Qwen3-VL-30B-A3B-Instruct"
   port: 8000
   temperature: 0.0
   extraction_temperature_self_consistency: 0.7   # only used when extract_self_consistency_k > 1

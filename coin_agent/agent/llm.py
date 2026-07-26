@@ -6,6 +6,7 @@ parse.py's future LLM path) goes through `LLMClient.call()`.
 
 import hashlib
 import json
+import os
 import sys
 import time
 from dataclasses import dataclass
@@ -27,6 +28,20 @@ class LLMResult:
     logprobs: list | None
     latency_s: float
     cached: bool
+
+
+def _serialize_logprobs(logprobs):
+    """`logprobs` (when requested) is a list-per-token of lists of the openai SDK's `TopLogprob`
+    objects, not plain dicts/floats — plain json.dump() on them raises TypeError. Caught live:
+    every want_logprobs=True call crashed trying to cache the result. Normalizes to plain
+    {token, logprob} dicts so cached and fresh results have the same JSON-safe shape.
+    """
+    if not logprobs:
+        return logprobs
+    return [
+        [{"token": tl.token, "logprob": tl.logprob} for tl in position]
+        for position in logprobs
+    ]
 
 
 def _image_hash(image) -> str:
@@ -76,16 +91,31 @@ class LLMClient:
         return self.cache_dir / f"{key}.json"
 
     def _load_cached(self, key: str) -> LLMResult | None:
+        """A corrupt/truncated cache file (e.g. from a crash mid-write — see _store_cache's
+        atomic-write fix) must read back as a cache miss, not propagate a crash on every future
+        call for that key forever. Caught live: a pre-fix serialization crash left exactly such
+        a file on disk.
+        """
         path = self._cache_path(key)
         if not path.exists():
             return None
-        with open(path) as f:
-            payload = json.load(f)
+        try:
+            with open(path) as f:
+                payload = json.load(f)
+        except (json.JSONDecodeError, KeyError):
+            return None
         return LLMResult(text=payload["text"], logprobs=payload.get("logprobs"), latency_s=0.0, cached=True)
 
     def _store_cache(self, key: str, text: str, logprobs) -> None:
-        with open(self._cache_path(key), "w") as f:
+        """Write-then-rename: a crash partway through json.dump (e.g. an unserializable value)
+        must not leave a truncated file at the real cache path — that file would then read back
+        as corrupt on every subsequent call for this key, forever (see _load_cached's fix).
+        """
+        final_path = self._cache_path(key)
+        tmp_path = final_path.with_suffix(f".{os.getpid()}.tmp")
+        with open(tmp_path, "w") as f:
             json.dump({"text": text, "logprobs": logprobs}, f)
+        tmp_path.replace(final_path)
 
     def call(
         self,
@@ -130,6 +160,7 @@ class LLMClient:
                 latency = time.monotonic() - start
                 self.time_required += latency
                 text, logprobs = (result if want_logprobs else (result, None))
+                logprobs = _serialize_logprobs(logprobs)
                 if use_cache:
                     self._store_cache(key, text, logprobs)
                 return LLMResult(text=text, logprobs=logprobs, latency_s=latency, cached=False)

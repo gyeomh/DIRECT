@@ -59,25 +59,58 @@ never overwritten, only ever added to.
 ## What's stubbed vs. real
 
 All three prompts (`parse.DESCRIPTION_PARSE_PROMPT`, `extract.EXTRACTION_PROMPT`,
-`adjudicate.ADJUDICATION_PROMPT`) are now written and wired in.
+`adjudicate.ADJUDICATION_PROMPT`) are written, wired in, and **live-tested end to end** against a
+real model: `Qwen/Qwen3-VL-30B-A3B-Instruct` served via vllm, pinned to a single GPU. See
+`config.yaml`'s `vllm.model_id` comment for the exact vllm/torch combo that made this work on a
+driver capped at CUDA 12.8 (`vllm==0.15.0`, which pins `torch==2.9.1` — its default PyPI build is
+`+cu128`; anything from `vllm>=~0.2x` defaults to a CUDA-13-only build and will not run here).
 
-- **Real, tested now (86 passing tests):** every module in `agent/` — `schema`, `canon`, `state`,
-  `compare`, `select`, `budget`, `parse`, `extract`, `adjudicate`, `llm`, and `questioner`
-  orchestration end to end. Integration tests still monkeypatch `extract`/`adjudicate` (there's
-  no live vllm server in CI), but `test_extract.py`/`test_adjudicate.py` exercise the real prompt
-  text and parsing logic directly.
-- **Two real bugs caught and fixed while writing these prompts** (both have regression tests):
-  1. `extract.py` confidence used to multiply the visibility factor by a placeholder logprob
+- **Real, tested now (90 passing tests):** every module in `agent/`. Integration tests use
+  monkeypatched `extract`/`adjudicate` (no vllm server in CI), but `test_extract.py` /
+  `test_adjudicate.py` / `test_parse.py` exercise the real prompt text and parsing logic directly,
+  and several of their regression tests came directly from bugs the live run below surfaced.
+- **Live run against the real model:** 14 full episodes through `env.QAEnv` + `GraphQuestioner`,
+  using our own `ClientBasedLLM` (same server) as a stand-in oracle (no Gemini key configured).
+  Zero crashes, all actions valid. The one 1-candidate episode tested (trivially always the match)
+  went 6/6 correct across every description type; a harder 5-candidate episode never went fully
+  correct in 6 attempts — see the open question below.
+- **Five real bugs caught and fixed during this live run** (all have regression tests):
+  1. `canon.py`'s color synonym table only listed specific "modifier + color" phrases
+     (`"light blue"`, `"dark grey"`) — every other combination (`"light green"`, `"multicolored"`)
+     silently failed to normalize, discarding genuinely correct model output. Added a
+     modifier-stripping fallback instead of trying to enumerate every combination.
+  2. `llm.py` crashed trying to JSON-cache logprobs (`want_logprobs=True` returns openai SDK
+     `TopLogprob` objects, not plain dicts) — every single extraction call would have failed the
+     moment a live server was used. Also: the crash left a truncated cache file that would have
+     kept failing forever on retry (a `_load_cached` cache hit on a corrupt file). Fixed both:
+     serialize logprobs to plain dicts, and write the cache file atomically (temp file + rename).
+  3. **The most consequential one:** `compare.py` treated free-text slot mismatches (e.g.
+     `ctx.above.object`) as `FAR` (decisive), reasoning that otherwise these Tier-A slots could
+     never be decisive. Live-tested this exact assumption and it backfired immediately: `extract()`
+     correctly said `"picture"` (bare noun) while the oracle's verbose answer to the same question
+     ("A painting of a girl on a swing, flowers, and butterflies") produced a differently-worded
+     belief value — flipping a genuinely correct match into a wrong conclusion on the very first
+     test episode. Reverted to `NEAR` (never decisive) for free-text slots — tested, not assumed,
+     per spec §8's own philosophy. Also improved `parse._clean_free_text` to reduce verbose oracle
+     answers to their head noun, independently of whether that reduction is decisive.
+  4. `extract.py` confidence used to multiply the visibility factor by a placeholder logprob
      value of 0.5, so even a `"clear"` observation computed confidence `0.5 × 1.0 = 0.5` — below
      the default `tau_obs=0.80` — silently failing every slot's confidence check with no visible
      error. Fixed: confidence is the self-reported visibility factor alone until real per-token
      logprob slicing is a documented v2 addition, not faked in.
-  2. `adjudicate.qa_history_text` printed a bundled question's Q&A pair twice (`select.py` bundles
+  5. `adjudicate.qa_history_text` printed a bundled question's Q&A pair twice (`select.py` bundles
      ≤2 same-region slots into one question, recorded once per slot in `belief.asked` with
      identical question text) — deduped by question text.
-- **Not yet live-tested against a real vllm/Qwen server** — that's the natural next step once one
-  is running (spec §10 step 1: a small smoke test asserting the §0 ground-truth facts still hold
-  against the installed repo, still to write).
+- **Open design question, not yet resolved:** on the harder 5-candidate episode, the questioner
+  repeatedly concluded `True` via `select.candidate_pool()` being empty ("no discriminative slots
+  remain, elimination") on candidates that likely weren't the actual match. Root cause hypothesis:
+  an empty pool can mean either "everything checkable has been confirmed" (the spec's intended
+  reading) *or* "this candidate's photo just wasn't informative enough for the remaining unresolved
+  slots" (low-confidence extraction, not confirmation) — and these are currently indistinguishable.
+  This is the same shape of bug as the hedged-slot fix in `questioner.py` (empty-pool-for-the-wrong-
+  reason), but for low observation confidence rather than hedged oracle answers. Not fixed yet —
+  needs a design decision on how to detect "this candidate just wasn't informative" vs. "genuinely
+  confirmed," discussed with the user before changing.
 - **CLI stubs (logic depends on the above, now unblocked):** `scripts/build_priors.py`,
   `scripts/run_eval.py`, `scripts/ablate.py`.
 - **Runtime-only patches, upstream files untouched:** `patches/` — see `patches/README.md`.

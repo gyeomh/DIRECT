@@ -71,11 +71,25 @@ def _extract_bool(text: str) -> bool | None:
     return None
 
 
+_LEADING_ARTICLE = re.compile(r"^(a|an|the)\s+")
+_HEAD_NOUN_BOUNDARY = re.compile(r"\b(of|with|on|under|over|near|behind|in|at|and)\b")
+
+
 def _clean_free_text(text: str) -> str | None:
-    # First clause only — oracle answers are capped under 15 words but often still a full
-    # sentence ("It's a stainless steel range."); a free-text slot canon value should be the
-    # noun phrase, not the whole sentence. This is a first pass — no NP chunker.
+    # Reduce a verbose oracle answer down to its head noun phrase — oracle answers are capped
+    # under 15 words but can still be a full descriptive sentence ("A painting of a girl on a
+    # swing, flowers, and butterflies."), not the bare noun our own extract()/parse_description
+    # prompts are instructed to produce ("picture"). Caught live: a real run left the belief
+    # holding the full clause while frame held the bare noun, which compare.py used to treat as
+    # a decisive FAR conflict purely from this granularity mismatch (see compare.py's note — that
+    # decisiveness was reverted, but cleaner extraction here still matters for belief_text quality
+    # fed to the adjudicator). No real NP chunker: strip a leading filler clause and article, then
+    # cut at the first preposition/conjunction, comma, or period, keeping only the head noun(s).
     cleaned = re.sub(r"^(it'?s|it is|there is|there'?s|the .*? (is|are|rests? on|sits? on))\s+", "", _norm_text(text))
+    cleaned = _LEADING_ARTICLE.sub("", cleaned)
+    boundary = _HEAD_NOUN_BOUNDARY.search(cleaned)
+    if boundary:
+        cleaned = cleaned[:boundary.start()]
     return cleaned.split(",")[0].split(".")[0].strip().rstrip(".") or None
 
 

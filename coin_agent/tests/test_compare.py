@@ -30,6 +30,22 @@ def test_hedged_belief_never_decisive():
     assert not result.decisive_conflict
 
 
+def test_free_text_slot_mismatch_is_never_decisive():
+    """Regression test for a real false conclusion hit during a live run against Qwen3-VL:
+    extract() correctly said ctx.above.object="picture" (bare noun, as required), while the
+    oracle's verbose answer to the same question produced a differently-worded belief value for
+    the same real object. Free-text slots have no synonym table (unlike colors/materials), so a
+    mismatch here must be treated as NEAR (never decisive), not FAR — see compare.py's note.
+    ctx.above.object is Tier A, which is exactly the case that would previously have produced a
+    spurious decisive CONFLICT.
+    """
+    frame = _frame(**{"ctx.above.object": SlotValue(canon="picture", confidence=0.95, certainty="resolved")})
+    belief = _belief(**{"ctx.above.object": SlotValue(canon="a painting of a girl on a swing", confidence=1.0, certainty="resolved", provenance="oracle")})
+    result = compare.compare(frame, belief, tau_obs=0.8)
+    assert not result.decisive_conflict
+    assert result.per_slot["ctx.above.object"].verdict == compare.WEAK_CONFLICT
+
+
 def test_low_confidence_observation_never_decisive():
     frame = _frame(**{"obj.color_primary": SlotValue(canon="navy", confidence=0.5, certainty="resolved")})
     belief = _belief(**{"obj.color_primary": SlotValue(canon="white", confidence=1.0, certainty="resolved", provenance="description")})
