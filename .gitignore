@@ -5,3 +5,5 @@ QA_eval/
 coin_agent/artifacts/cache/
 coin_agent/artifacts/priors.json
 .pytest_cache/
+results/*.gzip.json
+manual_play/queue/*.jsonl
