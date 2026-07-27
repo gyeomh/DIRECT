@@ -65,3 +65,29 @@ class WorkingMockOracle:
 
     def ask(self, *, prompt: str = "", images=None):
         return "Yes that is true [Mock answer]"
+
+
+_TYPO = "correnctly"
+_FIXED_TYPO = "correctly"
+
+
+def fix_answer_prompt_typo() -> None:
+    """Monkeypatches env.py's module-level ANSWER_PROMPT constant *in memory* — not a file edit.
+    env._get_observation() looks up ANSWER_PROMPT as a global at call time, so reassigning the
+    module attribute after import is sufficient; no exec-the-patched-source trick needed here
+    (that's only required for eval_model.py's __main__-time bugs, where the buggy line lives
+    inside a function body executed once at script-run time, not a plain constant).
+
+    Keep upstream's ANSWER_PROMPT exactly as-is except the one typo: "correnctly" -> "correctly".
+    Nothing else about the prompt changes.
+
+    IMPORTANT: the official harness does not apply this patch and therefore keeps the typo. Any
+    local run that calls this is not byte-for-byte identical to the official oracle prompt.
+    """
+    import env
+
+    if _TYPO not in env.ANSWER_PROMPT:
+        raise UpstreamChangedError(
+            f"Expected typo {_TYPO!r} not found in env.ANSWER_PROMPT — re-verify ENV.md/env.py."
+        )
+    env.ANSWER_PROMPT = env.ANSWER_PROMPT.replace(_TYPO, _FIXED_TYPO)

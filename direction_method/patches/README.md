@@ -59,11 +59,42 @@ Not a subclass of the broken `MockOracle` (subclassing wouldn't fix the missing 
 inherited method); a standalone class satisfying the same duck-typed interface `env.py` expects
 (an object with `.ask(*, prompt, images)`).
 
+## 5. `results/` directory doesn't exist — not a bug, a missing precondition
+
+`eval_model.py`'s final step writes `results/<QuestionerClass>_<type>_<run>_<start>_<end>.gzip.json`
+via `gzip.GzipFile(path, "w")`, which doesn't create parent directories. The repo ships no
+`results/` directory, so a full run crashes with `FileNotFoundError` at the very last step —
+after every episode has already completed — unless the directory is created first. Not
+version-controllable as an empty dir (git doesn't track empty directories), so anything driving
+`eval_model.py` end to end must `mkdir -p results` before running. `scripts/verify_env.py` and
+`scripts/run_self_check_experiment.py` (once it drives the full harness rather than calling the
+oracle stand-in directly) both need this.
+
+## 6. `ANSWER_PROMPT` typo — kept as ENV.md's word choice, not "fixed" upstream
+
+`env.py:14`:
+
+```python
+ANSWER_PROMPT = "You are a faithful assistant. Answer correnctly to the following question based on the above image: {QUESTION}. Be concise (under 15 words)."
+```
+
+`correnctly` should be `correctly`. `apply_patches.fix_answer_prompt_typo()` monkeypatches
+`env.ANSWER_PROMPT` in memory (module-global reassignment after import — `_get_observation()`
+reads the name from `env`'s module namespace at call time, so this is sufficient; no need for the
+exec-a-patched-source trick issues 1–2 use, since this isn't inside a function body executed once
+at script-run time). **Nothing else about the prompt text changes.**
+
+**The official harness does not apply this patch and therefore keeps the typo.** Any local run
+using this fix is not byte-for-byte identical to what the real evaluation sends the real oracle.
+This matters if a method's self_check/context_parser prompts are ever tuned against logged
+oracle answers — those answers were produced against the *typo'd* prompt in a real run, the
+*fixed* one in ours. In practice this one word is unlikely to change answer quality, but the
+discrepancy is worth remembering rather than silently forgetting which prompt produced which log.
+
 ## Not a bug: swapping in a questioner
 
 Same mechanism as `coin_agent/patches/`: `apply_patches.substitute_questioner_import()` rewrites
 `from Questioner import YourQuestioner` to point at whichever questioner class this method
-eventually provides. For step 1 (this directory's only content so far), nothing calls it yet —
-`scripts/verify_env.py` drives the env/eval loop directly rather than through `eval_model.py`'s
-`__main__` block, since step 1 explicitly excludes writing method code and `eval_model.py` has no
-questioner to import until one exists.
+provides. Used in `scripts/verify_env.py` (step 1) to run the real, patched `eval_model.py`
+`__main__` block end to end with a throwaway `TrivialQuestioner`. Will be used again once a real
+questioner exists.
