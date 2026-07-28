@@ -436,10 +436,25 @@ ones the description didn't mention) — an all-11-keys-present-but-mostly-empty
 
 - Logprob tie-break and follow-up question construction (§7) — deferred.
 - `max_pixels` value.
-- `zone_gen`'s bbox coordinate convention (§5-1) — assumed relative `[0, 1000]`, not yet verified
-  against real model output. Verify tomorrow (`scripts/verify_zone_gen.py`).
 - Whether the edge-touch leak logged by `zone_gen`'s geometry cross-check (§5-2) is frequent enough
-  to warrant filtering — decide from the logged frequency once real numbers exist.
+  to warrant filtering — decide from the logged frequency once more real numbers exist (6/25 in
+  the first real sample; see the real-server section below).
+- **`context_parser` unreliably files relational facts under `Target` instead of their own key.**
+  Confirmed against the real model: "White bed with a blue blanket next to a nightstand" produced
+  `{"Target": ["it is white", "it has a blue blanket", "it is next to a nightstand"]}` instead of
+  the spec's own worked example (`{"Target": ["it is white"], "on": ["a blue blanket"], "next to":
+  ["a nightstand"]}`, §10) — every relational fact got reworded into a Target-shaped sentence and
+  dumped under `Target` rather than split into its own region key. Same pattern on "Dark gray
+  slatted heater beneath a round mirror" (no `above` key at all) and "Large beige carpet under a
+  wooden coffee table" (no `above` key). This is a real prompt-following gap, not a crash — the
+  JSON is valid and parses fine, it's just the wrong shape. Needs a decision (tighten the prompt's
+  worked examples further, or add a post-hoc key-reassignment heuristic) before relying on
+  `context_parser`'s relational checklist entries for anything.
+- `checklist_update` misfiled one case in five hand-built examples: the mandatory first/target
+  question's own answer landed under `on` instead of `Target` (rule 2, "keep the asked key," not
+  followed for that one case). The other four (atomic splitting, empty-region wording, duplicate
+  skipping, hedge preservation) all matched the spec exactly. Isolated so far — re-test with more
+  cases before deciding whether this needs a fix.
 
 **Resolved by this decision:** `self_check` polarity is (a), contradiction-framed yes/no (§7). The
 `Target` node needs no special handling in Step 2 beyond `region_for`'s own `"Target"` sentinel —
@@ -481,6 +496,46 @@ question — expected and consistent with "the accuracy number is meaningless" (
 4), not a sign anything is broken. Multi-candidate continuation, relation-queue draining, budget
 stops, and checklist growth across candidates are exercised instead by `tests/test_questioner.py`,
 where a scripted backend controls exact verdict sequences.
+
+**First real-server verification pass (GPU 1, `vllm==0.15.0`, `Qwen/Qwen3-VL-30B-A3B-Instruct`,
+port 8002 — 8000/8001 were already in use by unrelated processes on this shared machine):**
+
+- **`guided_json` fix, confirmed and applied.** `extra_body={"guided_json": schema}` is silently
+  ignored by this vllm version — the server logs `WARNING ... fields were present in the request
+  but ignored: {'guided_json'}` on every call, no exception. Short prompts happened to get valid
+  JSON anyway (the model complied without being forced to); `self_check`'s long prompt did not —
+  the model mimicked the prompt's own "evidence — ... / verdict — ..." field-description
+  formatting instead of emitting JSON, so 100% of calls came back as `PARSE_ERROR`.
+  `extra_body={"response_format": {"type": "json_schema", "json_schema": {"name": "response",
+  "schema": schema, "strict": True}}}` **is** honored (no "ignored" warning, valid JSON on both
+  short and long prompts) and is now what `llm.py`'s `VLLMBackend.generate()` sends.
+- **`zone_gen`'s bbox `[0, 1000]` coordinate convention is confirmed correct** on the real model —
+  drawn boxes land squarely on the target at the right scale across every image checked by hand,
+  including the "one box per run" cases that matter most (a double-vanity cabinet, a 4-drawer
+  dresser, a glass-front display cabinet all box as one unit, not per-door/per-drawer). `verify_zone_gen.py`'s
+  real numbers on 25 images: box count `{1: 24, 2: 1}`, region count `{3: 1, 4: 10, 5: 14}`,
+  0/25 fallback fires, 6/25 edge-touch leaks (a direction whose edge the box touches still came
+  back from the VLM) — logged per §5-2's design, not yet acted on.
+- **`self_check` false-`"no"` rate: 4.2% (5/120)** once `guided_json` was fixed (was 100%
+  `PARSE_ERROR` before the fix, 0% after on the same statements). The 5 real failures, read by
+  hand: two color-adjacent misses (oracle said "white frame," `self_check` saw "silver frame," on
+  a mirror, twice), one shape miss ("curved top edge" vs. a straight one), one **left/right flip**
+  (oracle: "on the left," `self_check`: "on the right of the monitor" — the most concerning of the
+  five, since left/right is a hard binary, not a coarse judgment call), and one `above`/`on`
+  wording clash (oracle said "above the carpet" meaning "resting on it"; `self_check` read `above`
+  literally and called it a contradiction — suggests `above` may not read naturally for floor-level
+  targets like carpets/rugs, worth a design note if carpet/rug episodes are common).
+- **`context_parser`'s checklist arrays needed a `maxItems` cap.** Without one, 3/11 hand-picked
+  descriptions caused the model to enter a token-repetition loop inside one checklist array (the
+  same assertion string appended dozens of times) — a strict `json_schema` grammar does nothing to
+  stop this, since an unbounded array is a valid completion at every step, so generation ran until
+  `max_tokens` truncated the response mid-string and it failed to parse. `maxItems: 8` on every
+  checklist value array (both `context_parser.py` and `checklist_update.py`, same schema shape) fixed
+  the crash. It did not fix the underlying content problem — see Open Items (§11) for the
+  relation-vs-`Target` key-filing issue this surfaced.
+- **Prefix caching confirmed engaging**: `check_prefix_caching()` on a real image, two suffixes —
+  first call TTFT 0.47s, second (same image, different suffix) TTFT 0.11s, about 4x faster,
+  consistent with the image's KV cache being reused.
 
 ---
 

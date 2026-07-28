@@ -96,12 +96,16 @@ class FakeVLMBackend:
 class VLLMBackend:
     """Real backend: OpenAI-compatible vllm server via the repo's own ClientBasedLLM.
 
-    TODO(tomorrow, needs a live server to confirm): `extra_body={"guided_json": schema}` is the
-    classic vllm guided-decoding parameter shape, matching SPEC.md §8's own terminology
-    ("guided_json for zone_gen and self_check outputs"). Some vllm versions instead expect the
-    OpenAI-native `response_format={"type": "json_schema", "json_schema": {...}}`. Verify against
-    whichever vllm version actually gets served tomorrow — if `extra_body` errors or is silently
-    ignored (model ignores the schema), switch to `response_format`.
+    CONFIRMED against a live vllm==0.15.0 server (Qwen/Qwen3-VL-30B-A3B-Instruct, GPU 1):
+    `extra_body={"guided_json": schema}` is silently ignored on this version -- the server logs
+    `WARNING ... The following fields were present in the request but ignored: {'guided_json'}`
+    on every single call, no exception raised. On short/simple prompts the model happened to
+    emit valid JSON anyway (looked like it worked), but on self_check's long prompt -- which
+    itself contains an inline "evidence — ... / verdict — ..." field-description example right
+    before the JSON output example -- the unconstrained model mimicked that em-dash format
+    instead of emitting JSON, causing 100% PARSE_ERROR. The OpenAI-native
+    `response_format={"type": "json_schema", "json_schema": {...}}` shape IS honored (no
+    "ignored" warning, valid JSON on both short and long prompts) and is what's used below.
     """
 
     def __init__(self, model_id: str, *, port: int = 8000, temperature: float = 0.0):
@@ -112,7 +116,12 @@ class VLLMBackend:
     def generate(self, prompt: str, image, response_schema: dict | None, timeout_s: float) -> str:
         kwargs = {"timeout": timeout_s}
         if response_schema is not None:
-            kwargs["extra_body"] = {"guided_json": response_schema}
+            kwargs["extra_body"] = {
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {"name": "response", "schema": response_schema, "strict": True},
+                }
+            }
         return self._client.ask(prompt=prompt, images=[image] if image is not None else None, **kwargs)
 
     def stream_with_ttft(self, prompt: str, image, response_schema: dict | None):
@@ -170,7 +179,7 @@ class LLMClient:
         backend: str | None = None,
         cache_dir: str | Path = "artifacts/cache",
         timeout_s: float = 20.0,
-        port: int = 8000,
+        port: int | None = None,
         temperature: float = 0.0,
     ):
         self.model_id = model_id
@@ -183,7 +192,11 @@ class LLMClient:
         if self.backend_name == "fake":
             self._backend = FakeVLMBackend()
         else:
-            self._backend = VLLMBackend(model_id, port=port, temperature=temperature)
+            # VLM_PORT lets a one-off run point at a non-default port (e.g. 8000 already taken by
+            # an unrelated process on a shared machine) without editing every script that
+            # constructs LLMClient() without an explicit port -- same override pattern as VLM_BACKEND.
+            resolved_port = port if port is not None else int(os.environ.get("VLM_PORT", 8000))
+            self._backend = VLLMBackend(model_id, port=resolved_port, temperature=temperature)
 
     def _cache_path(self, key: str) -> Path:
         return self.cache_dir / f"{key}.json"

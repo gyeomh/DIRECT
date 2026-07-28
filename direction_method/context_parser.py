@@ -104,6 +104,14 @@ or the target — those are added later from the region key.
 # checklist keys are pinned to the 11-key enum (templates.CHECKLIST_KEYS) via additionalProperties:
 # False + an explicit property per key -- there is no per-key "required", since only the region
 # keys the description actually mentions should appear (rule 4: category-only -> checklist == {}).
+#
+# maxItems=8 on each key's array: confirmed against a live vllm==0.15.0 server that without it,
+# the model can enter a token-repetition loop (the same assertion string appended dozens of
+# times) that a strict json_schema grammar does nothing to stop -- an unbounded array is a valid
+# completion at every step, so it runs until max_tokens truncates the response mid-string and it
+# fails to parse entirely. No real description needs more than a handful of atomic facts per key.
+_CHECKLIST_VALUE_SCHEMA = {"type": "array", "items": {"type": "string"}, "maxItems": 8}
+
 CONTEXT_PARSER_SCHEMA = {
     "type": "object",
     "properties": {
@@ -111,7 +119,7 @@ CONTEXT_PARSER_SCHEMA = {
         "target_phrase": {"type": "string", "description": "Target with its own attributes; no clauses about other objects."},
         "checklist": {
             "type": "object",
-            "properties": {k: {"type": "array", "items": {"type": "string"}} for k in CHECKLIST_KEYS},
+            "properties": {k: _CHECKLIST_VALUE_SCHEMA for k in CHECKLIST_KEYS},
             "additionalProperties": False,
         },
     },
