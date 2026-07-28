@@ -30,6 +30,12 @@ def test_build_prompt_contains_verbatim_system_prompt_unchanged():
     assert schema == SELF_CHECK_SCHEMA
 
 
+def test_prompt_covers_the_reverse_empty_case():
+    # closes the gap "REGION VISIBLY EMPTY" (assertion says something is there, image is bare)
+    # doesn't cover: an assertion claiming the region is empty when it plainly is not.
+    assert "REGION CLAIMED EMPTY BUT IS NOT" in SELF_CHECK_PROMPT
+
+
 def test_build_prompt_embeds_region_and_assertion_as_separate_fields():
     prompt, _ = build_prompt("left of the cabinet", "wooden tiles on a black wall")
     assert "region: left of the cabinet" in prompt
