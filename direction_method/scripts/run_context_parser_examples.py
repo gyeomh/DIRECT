@@ -57,12 +57,21 @@ def main() -> None:
 
     print(f"context_parser: {len(descriptions)} descriptions, backend={llm_client.backend_name}, model={MODEL_ID}")
     print("=" * 70)
+    n_errors = 0
     for description in descriptions:
-        result = parse_context(llm_client, description)
         print(f"\n> {description!r}")
+        try:
+            result = parse_context(llm_client, description)
+        except Exception as e:  # noqa: BLE001 -- one bad example must not stop the rest
+            n_errors += 1
+            print(f"  ERROR: {e}")
+            continue
         print(f"  target_category: {result.target_category!r}")
         print(f"  target_phrase:   {result.target_phrase!r}")
         print(f"  checklist:       {result.checklist}")
+
+    if n_errors:
+        print(f"\n{n_errors}/{len(descriptions)} descriptions raised an error -- see above.")
 
 
 if __name__ == "__main__":

@@ -75,12 +75,18 @@ Include only keys that have new assertions. If nothing should be added, return
 # additions' keys are pinned to the same 11-key enum as context_parser's checklist (§10) --
 # additionalProperties:False plus an explicit property per key, no per-key "required" since only
 # keys with genuinely new assertions should appear.
+#
+# maxItems=8: same fix as context_parser.py's schema, for the same reason -- confirmed against a
+# live server that an unbounded per-key array lets the model loop-repeat the same assertion string
+# until max_tokens cuts the response off mid-string.
+_ADDITIONS_VALUE_SCHEMA = {"type": "array", "items": {"type": "string"}, "maxItems": 8}
+
 CHECKLIST_UPDATE_SCHEMA = {
     "type": "object",
     "properties": {
         "additions": {
             "type": "object",
-            "properties": {k: {"type": "array", "items": {"type": "string"}} for k in CHECKLIST_KEYS},
+            "properties": {k: _ADDITIONS_VALUE_SCHEMA for k in CHECKLIST_KEYS},
             "additionalProperties": False,
         },
     },
