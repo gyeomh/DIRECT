@@ -1,86 +1,171 @@
-"""self_check (SPEC.md §7): single statement + image -> verdict. One call per statement, never
-batched. Two candidate polarities, deliberately NOT chosen here — see
-scripts/run_self_check_experiment.py, which measures the false-failure rate of each empirically,
-per SPEC's own instruction: "Pick on the data."
+"""self_check (SPEC.md §7): image + (region, assertion) -> (evidence, verdict).
+
+Polarity decided: (a) yes/no, framed as "does the image CONTRADICT the assertion" rather than
+"does the image align with the assertion" -- answering "no" (contradiction) requires positive
+visual evidence of falseness; "cannot confirm" is scored "yes" (not contradicted), never "no".
+Polarity (b) (contradicts/consistent/cant_tell) is removed; this was the empirical decision from
+the (now superseded) two-polarity comparison.
+
+One call per statement, never batched. The prompt text below is used verbatim -- do not
+paraphrase, shorten, or "clean up" the rule lists; the specificity is deliberate and is the whole
+point of this design. SPEC.md §7 describes the design decisions (input/output format, region
+derivation, prefix layout, experiment metric) without duplicating this prompt text, to avoid the
+two ever drifting apart -- this module is the single source of truth for the literal wording.
 """
 
 import json
+from dataclasses import dataclass
 
 from llm import LLMClient
 
-POLARITY_YES_NO = "yes_no"
-POLARITY_CONTRADICTS = "contradicts_consistent"
-POLARITIES = (POLARITY_YES_NO, POLARITY_CONTRADICTS)
+SELF_CHECK_PROMPT = """You verify a single claim against an image of an indoor scene.
 
-# --- polarity (a): "does the answer align with the image?" ------------------------------------
-YES_NO_PROMPT = """Look at the image. Does the following statement accurately describe something \
-that is visible in the image?
+The claim comes in two fields:
+  region    — which part of the scene the claim is about
+  assertion — what is being claimed about that region
 
-Statement: "{STATEMENT}"
+Your job is NOT to judge whether the claim is a complete description.
+Your job is to judge whether the image CONTRADICTS the claim.
 
-Answer with exactly one word: "yes" if the statement aligns with what is shown in the image, \
-"no" if it does not."""
+=== CORE RULE ===
 
-YES_NO_SCHEMA = {
+Answer "no" ONLY when the image gives positive visual evidence that the assertion
+is false. If you simply cannot confirm the assertion, answer "yes".
+
+Not confirmed is not the same as contradicted. When in doubt, answer "yes".
+
+=== THESE ARE NOT CONTRADICTIONS — answer "yes" ===
+
+1. INCOMPLETENESS. The assertion mentions less than what is in the region.
+   Claim: "a window with plants"
+   Image: window, plants, a chair, a towel rail
+   -> yes. The claim never said those were the only things.
+
+2. NAMING VARIANCE. Same object, different reasonable word.
+   "wooden table" / butcher-block console      -> yes
+   "cabinet" / cupboard                        -> yes
+   "sofa" / couch                              -> yes
+   "shelving" / open shelves                   -> yes
+
+3. COLOR VARIANCE. Same color family under different lighting or wording.
+   "navy" / dark blue, deep blue               -> yes
+   "white" / off-white, cream, ivory           -> yes
+   "grey" / light grey, greige                 -> yes
+   "wooden" / oak, pine, walnut, natural wood  -> yes
+   Only clearly different families contradict: navy vs white, black vs beige.
+
+4. APPROXIMATE POSITION. Spatial terms are coarse.
+   "left" covers the whole left portion — upper-left, lower-left, near or far,
+   foreground or background. Same for the other directions.
+   "on" means resting on the object's top surface.
+   If the object is present anywhere plausibly in that region -> yes.
+
+5. MULTIPLE OBJECTS IN THE REGION. If the region holds several objects and ANY
+   ONE of them matches the assertion -> yes. The claim need not describe the
+   most prominent one.
+
+6. VAGUE QUANTITIES. "multiple items", "some plants", "a few books" match any
+   count of two or more. Do not count precisely.
+
+7. OCCLUSION OR CROPPING. The region is cut off by the frame, hidden behind
+   something, too small, or too dark to read -> yes. You cannot contradict what
+   you cannot see.
+
+8. HEDGED WORDING. "appears to be", "looks like", "possibly" — treat as a weak
+   claim. Only contradict if the image clearly shows otherwise.
+
+9. SPEAKER FRAMING. Ignore phrases like "I can see", "In this image", "There is".
+   Judge only the content that follows.
+
+=== THESE ARE CONTRADICTIONS — answer "no" ===
+
+1. WRONG ATTRIBUTE, CLEARLY VISIBLE. The object is plainly visible and the stated
+   attribute is plainly different.
+   Claim: "the cabinet is navy blue" / Image: the cabinet is clearly white -> no
+
+2. WRONG OBJECT TYPE. The region clearly holds something of a different kind, and
+   nothing matching the assertion is anywhere in that region.
+   Claim: "a wooden table on the left" / Image: left side is a refrigerator and
+   bare floor, no table of any kind -> no
+
+3. REGION VISIBLY EMPTY. The region is fully visible and contains nothing, while
+   the assertion says something is there.
+   Claim: "there are items on the cabinet" / Image: the cabinet top is fully
+   visible and completely bare -> no
+
+4. WRONG SCENE TYPE. The assertion describes a room or setting incompatible with
+   the image.
+   Claim: "on the left of the bed there is a bathtub" / Image: a kitchen -> no
+
+=== OUTPUT ===
+
+Write evidence first, then the verdict.
+
+evidence — under 15 words. Name what you actually looked at in the region and
+           what you saw there. Not a restatement of the claim.
+verdict  — "yes" or "no".
+
+{"evidence": "...", "verdict": "yes" | "no"}"""
+
+# Field order matches generation order (SPEC.md §7 item 4: "evidence first — field order is
+# generation order, so it acts as a short CoT"). Guided decoding pins verdict to the enum;
+# evidence is free text.
+SELF_CHECK_SCHEMA = {
     "type": "object",
-    "properties": {"verdict": {"type": "string", "enum": ["yes", "no"]}},
-    "required": ["verdict"],
+    "properties": {
+        "evidence": {"type": "string", "description": "Under 15 words. What was actually seen in the region."},
+        "verdict": {"type": "string", "enum": ["yes", "no"]},
+    },
+    "required": ["evidence", "verdict"],
 }
 
-# --- polarity (b): "is anything in this description inconsistent with the image?" -------------
-CONTRADICTS_PROMPT = """Look at the image and the following statement.
-
-Statement: "{STATEMENT}"
-
-Does anything in the statement directly and clearly contradict what is visible in the image? \
-Answer "contradicts" only if something in the statement is definitely wrong given what the image \
-shows. Answer "cant_tell" if the image does not show enough to judge one way or the other \
-(for example, the statement mentions something outside the frame, or something too small or \
-occluded to confirm). Otherwise, if nothing in the statement conflicts with the image, answer \
-"consistent"."""
-
-CONTRADICTS_SCHEMA = {
-    "type": "object",
-    "properties": {"verdict": {"type": "string", "enum": ["contradicts", "consistent", "cant_tell"]}},
-    "required": ["verdict"],
-}
-
-_TEMPLATES = {
-    POLARITY_YES_NO: (YES_NO_PROMPT, YES_NO_SCHEMA),
-    POLARITY_CONTRADICTS: (CONTRADICTS_PROMPT, CONTRADICTS_SCHEMA),
-}
+_TARGET_KEY = "Target"  # matches the checklist's own parent-key naming (SPEC.md §2)
 
 
-def build_prompt(polarity: str, statement: str) -> tuple[str, dict]:
-    if polarity not in _TEMPLATES:
-        raise ValueError(f"Unknown polarity: {polarity!r}, expected one of {POLARITIES}")
-    template, schema = _TEMPLATES[polarity]
-    return template.format(STATEMENT=statement), schema
-
-
-def self_check(llm_client: LLMClient, image, statement: str, polarity: str) -> str:
-    """Returns the raw verdict string ("yes"/"no", or "contradicts"/"consistent"/"cant_tell"),
-    or "PARSE_ERROR" if the model's response didn't parse as the requested schema — a parse
-    failure is itself worth counting, not silently swallowed (see is_failure below).
+def region_for(relation: str, target: str) -> str:
+    """Deterministic string assembly, no VLM call. Shared by both call sites so they produce
+    IDENTICAL region strings for the same (relation, target) pair:
+      - the oracle-answer path, called right after asking about `relation` (or with
+        `relation="Target"` for the mandatory first/target-appearance question)
+      - the checklist-item path, called with the assertion's parent key (which is drawn from
+        the same vocabulary: a SPEC §3 relation, or "Target")
     """
-    prompt, schema = build_prompt(polarity, statement)
+    if relation == _TARGET_KEY:
+        return f"the {target} itself"
+    if relation == "on":
+        return f"on top of the {target}"
+    return f"{relation} of the {target}"
+
+
+def build_prompt(region: str, assertion: str) -> tuple[str, dict]:
+    # Order is [image] -> [fixed system prompt] -> [variable region/assertion] (SPEC.md §7 item
+    # 5): the image goes first via llm.py's existing image-first message construction; within
+    # the text block, SELF_CHECK_PROMPT is a byte-identical prefix across every single call
+    # (not just same-image calls), with only this region/assertion suffix varying.
+    variable_part = f"region: {region}\nassertion: {assertion}"
+    prompt = f"{SELF_CHECK_PROMPT}\n\n{variable_part}"
+    return prompt, SELF_CHECK_SCHEMA
+
+
+@dataclass
+class SelfCheckResult:
+    evidence: str
+    verdict: str  # "yes" | "no" | "PARSE_ERROR"
+
+
+def self_check(llm_client: LLMClient, image, region: str, assertion: str) -> SelfCheckResult:
+    prompt, schema = build_prompt(region, assertion)
     result = llm_client.call(prompt, image, response_schema=schema)
     try:
-        return json.loads(result.text)["verdict"]
+        parsed = json.loads(result.text)
+        return SelfCheckResult(evidence=parsed["evidence"], verdict=parsed["verdict"])
     except (json.JSONDecodeError, KeyError, TypeError):
-        return "PARSE_ERROR"
+        return SelfCheckResult(evidence="", verdict="PARSE_ERROR")
 
 
-def is_failure(polarity: str, verdict: str) -> bool:
-    """SPEC.md §7: for polarity (b), only "contradicts" fails -- "cant_tell" counts as neither
-    pass nor fail. For this experiment's false-failure-rate metric specifically (ground truth is
-    always "pass"), "neither" is scored as not-a-failure: cant_tell doesn't wrongly terminate an
-    episode the way an actual "contradicts"/"no" would.
+def is_failure(verdict: str) -> bool:
+    """"no" is a contradiction (the real failure mode this experiment measures: the false-no
+    rate, since ground truth is always "yes" here). A parse failure is also worth counting as a
+    failure -- it's not a clean pass either, and silently treating it as "yes" would hide it.
     """
-    if verdict == "PARSE_ERROR":
-        return True
-    if polarity == POLARITY_YES_NO:
-        return verdict == "no"
-    if polarity == POLARITY_CONTRADICTS:
-        return verdict == "contradicts"
-    raise ValueError(f"Unknown polarity: {polarity!r}")
+    return verdict in ("no", "PARSE_ERROR")
