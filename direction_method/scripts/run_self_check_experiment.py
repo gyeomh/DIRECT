@@ -28,7 +28,8 @@ from PIL import Image
 from llm import LLMClient
 from oracle_stub import LocalOracleStandIn
 from patches.apply_patches import fix_answer_prompt_typo
-from self_check import is_failure, region_for, self_check
+from self_check import is_failure, self_check
+from templates import question_for, region_for
 
 MODEL_ID = "Qwen/Qwen3-VL-30B-A3B-Instruct"
 N_EPISODES = 30
@@ -36,8 +37,9 @@ SAMPLE_SEED = 0
 RELATIONS = ["left", "right", "above"]
 TARGET_QUESTION_TYPE = "target_appearance"  # the mandatory first question (SPEC.md §6)
 
+# "Target" has no entry in templates.QUESTION_TEMPLATES -- it only ever arrives from
+# context_parser, never from zone_gen, so it keeps its own fixed question string here.
 FIRST_QUESTION_TEMPLATE = "Can you describe the {TARGET}'s location and visual appearance (e.g., color, shape, size)."
-RELATION_QUESTION_TEMPLATE = "What is on the {RELATION} of the {TARGET}? Can you describe the shape and color?"
 
 
 def load_episodes(path: Path) -> list[dict]:
@@ -56,7 +58,7 @@ def questions_for(target_noun: str) -> list[tuple[str, str, str]]:
     """
     out = [(TARGET_QUESTION_TYPE, "Target", FIRST_QUESTION_TEMPLATE.format(TARGET=target_noun))]
     for r in RELATIONS:
-        out.append((r, r, RELATION_QUESTION_TEMPLATE.format(RELATION=r, TARGET=target_noun)))
+        out.append((r, r, question_for(r, target_noun)))
     return out
 
 

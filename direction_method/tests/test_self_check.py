@@ -12,34 +12,13 @@ from self_check import (
     SelfCheckResult,
     build_prompt,
     is_failure,
-    region_for,
     self_check,
 )
 
 IMG = np.zeros((8, 8, 3), dtype=np.uint8)
 
-
-# --- region_for: must produce identical strings for the oracle-answer path and the
-# checklist-item path, since both call it with the same (relation-or-parent-key, target) vocabulary.
-
-
-def test_region_for_target_question():
-    assert region_for("Target", "kitchen lower cabinet") == "the kitchen lower cabinet itself"
-
-
-def test_region_for_on_relation_is_special_cased():
-    assert region_for("on", "cabinet") == "on top of the cabinet"
-
-
-def test_region_for_ordinary_relation():
-    assert region_for("left", "kitchen lower cabinet") == "left of the kitchen lower cabinet"
-    assert region_for("right", "cabinet") == "right of the cabinet"
-    assert region_for("above", "cabinet") == "above of the cabinet"
-
-
-def test_region_for_is_deterministic_no_vlm_call():
-    # called twice with identical args must give identical output -- pure string assembly
-    assert region_for("left", "cabinet") == region_for("left", "cabinet")
+# region_for lives in templates.py (shared with the question path -- tests/test_templates.py has
+# full per-key grammar coverage). self_check.py itself takes an already-assembled region string.
 
 
 # --- prompt construction: verbatim prefix + variable suffix ------------------------------------
