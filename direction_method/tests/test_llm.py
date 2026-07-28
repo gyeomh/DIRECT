@@ -144,6 +144,14 @@ def test_schema_filler_handles_nested_object_and_array():
     assert isinstance(instance["count"], int)
 
 
+def test_schema_filler_respects_min_items_for_primitive_arrays():
+    # zone_gen's bbox_2d is `{"type": "array", "items": {"type": "integer"}, "minItems": 4,
+    # "maxItems": 4}` -- the filler must produce all 4 elements, not just one, or the caller's
+    # `x0, y0, x1, y1 = bbox_2d` unpacking crashes under FakeVLM.
+    schema = {"type": "array", "items": {"type": "integer"}, "minItems": 4, "maxItems": 4}
+    assert _fake_instance_for_schema(schema) == [0, 0, 0, 0]
+
+
 def test_no_image_calls_do_not_crash(tmp_path):
     client = LLMClient("fake-model", backend="fake", cache_dir=tmp_path)
     result = client.call("text-only prompt, no image")

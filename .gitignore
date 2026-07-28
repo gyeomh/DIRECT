@@ -9,3 +9,5 @@ results/*.gzip.json
 manual_play/queue/*.jsonl
 direction_method/artifacts/cache/
 direction_method/artifacts/self_check_failures.json
+direction_method/artifacts/zone_gen_gallery.html
+direction_method/artifacts/zone_gen_verify/
