@@ -119,23 +119,6 @@ SELF_CHECK_SCHEMA = {
     "required": ["evidence", "verdict"],
 }
 
-_TARGET_KEY = "Target"  # matches the checklist's own parent-key naming (SPEC.md §2)
-
-
-def region_for(relation: str, target: str) -> str:
-    """Deterministic string assembly, no VLM call. Shared by both call sites so they produce
-    IDENTICAL region strings for the same (relation, target) pair:
-      - the oracle-answer path, called right after asking about `relation` (or with
-        `relation="Target"` for the mandatory first/target-appearance question)
-      - the checklist-item path, called with the assertion's parent key (which is drawn from
-        the same vocabulary: a SPEC §3 relation, or "Target")
-    """
-    if relation == _TARGET_KEY:
-        return f"the {target} itself"
-    if relation == "on":
-        return f"on top of the {target}"
-    return f"{relation} of the {target}"
-
 
 def build_prompt(region: str, assertion: str) -> tuple[str, dict]:
     # Order is [image] -> [fixed system prompt] -> [variable region/assertion] (SPEC.md §7 item
