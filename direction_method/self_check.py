@@ -97,6 +97,9 @@ Not confirmed is not the same as contradicted. When in doubt, answer "yes".
    the image.
    Claim: "on the left of the bed there is a bathtub" / Image: a kitchen -> no
 
+5. REGION CLAIMED EMPTY BUT IS NOT. The assertion says the region is empty or
+   holds nothing, and the region is fully visible with clear objects in it.
+
 === OUTPUT ===
 
 Write evidence first, then the verdict.
