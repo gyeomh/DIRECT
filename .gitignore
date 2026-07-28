@@ -11,3 +11,5 @@ direction_method/artifacts/cache/
 direction_method/artifacts/self_check_failures.json
 direction_method/artifacts/zone_gen_gallery.html
 direction_method/artifacts/zone_gen_verify/
+direction_method/agent_bridge_queue/
+direction_method/artifacts/agent_verification/
