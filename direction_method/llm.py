@@ -71,7 +71,8 @@ def _fake_instance_for_schema(schema: dict):
         return {k: _fake_instance_for_schema(v) for k, v in props.items()}
     if t == "array":
         item_schema = schema.get("items", {"type": "string"})
-        return [_fake_instance_for_schema(item_schema)]
+        n = schema.get("minItems", 1)
+        return [_fake_instance_for_schema(item_schema) for _ in range(n)]
     if t == "integer":
         return 0
     if t == "number":
