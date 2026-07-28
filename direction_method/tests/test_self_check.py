@@ -7,73 +7,117 @@ import numpy as np
 
 from llm import LLMClient
 from self_check import (
-    CONTRADICTS_SCHEMA,
-    POLARITY_CONTRADICTS,
-    POLARITY_YES_NO,
-    YES_NO_SCHEMA,
+    SELF_CHECK_PROMPT,
+    SELF_CHECK_SCHEMA,
+    SelfCheckResult,
     build_prompt,
     is_failure,
+    region_for,
     self_check,
 )
 
 IMG = np.zeros((8, 8, 3), dtype=np.uint8)
 
 
-def test_build_prompt_yes_no_embeds_statement():
-    prompt, schema = build_prompt(POLARITY_YES_NO, "The cabinet is white.")
-    assert "The cabinet is white." in prompt
-    assert schema == YES_NO_SCHEMA
+# --- region_for: must produce identical strings for the oracle-answer path and the
+# checklist-item path, since both call it with the same (relation-or-parent-key, target) vocabulary.
 
 
-def test_build_prompt_contradicts_embeds_statement():
-    prompt, schema = build_prompt(POLARITY_CONTRADICTS, "The cabinet is white.")
-    assert "The cabinet is white." in prompt
-    assert schema == CONTRADICTS_SCHEMA
+def test_region_for_target_question():
+    assert region_for("Target", "kitchen lower cabinet") == "the kitchen lower cabinet itself"
 
 
-def test_build_prompt_unknown_polarity_raises():
-    try:
-        build_prompt("nonsense", "statement")
-        raise AssertionError("expected ValueError")
-    except ValueError:
-        pass
+def test_region_for_on_relation_is_special_cased():
+    assert region_for("on", "cabinet") == "on top of the cabinet"
 
 
-def test_is_failure_yes_no():
-    assert is_failure(POLARITY_YES_NO, "no") is True
-    assert is_failure(POLARITY_YES_NO, "yes") is False
+def test_region_for_ordinary_relation():
+    assert region_for("left", "kitchen lower cabinet") == "left of the kitchen lower cabinet"
+    assert region_for("right", "cabinet") == "right of the cabinet"
+    assert region_for("above", "cabinet") == "above of the cabinet"
 
 
-def test_is_failure_contradicts_cant_tell_is_not_a_failure():
-    """SPEC.md §7: cant_tell counts as neither pass nor fail -- for this experiment's
-    false-failure-rate metric, that means NOT a failure (it wouldn't wrongly terminate a real
-    episode the way an actual 'contradicts' would).
+def test_region_for_is_deterministic_no_vlm_call():
+    # called twice with identical args must give identical output -- pure string assembly
+    assert region_for("left", "cabinet") == region_for("left", "cabinet")
+
+
+# --- prompt construction: verbatim prefix + variable suffix ------------------------------------
+
+
+def test_build_prompt_contains_verbatim_system_prompt_unchanged():
+    prompt, schema = build_prompt("left of the cabinet", "wooden tiles on a black wall")
+    assert prompt.startswith(SELF_CHECK_PROMPT)
+    assert schema == SELF_CHECK_SCHEMA
+
+
+def test_build_prompt_embeds_region_and_assertion_as_separate_fields():
+    prompt, _ = build_prompt("left of the cabinet", "wooden tiles on a black wall")
+    assert "region: left of the cabinet" in prompt
+    assert "assertion: wooden tiles on a black wall" in prompt
+
+
+def test_build_prompt_is_byte_identical_prefix_across_different_assertions():
+    """SPEC.md §7 item 5: the fixed system prompt must be a byte-identical prefix across every
+    call, regardless of image or assertion, so prefix caching covers the rule text too.
     """
-    assert is_failure(POLARITY_CONTRADICTS, "contradicts") is True
-    assert is_failure(POLARITY_CONTRADICTS, "consistent") is False
-    assert is_failure(POLARITY_CONTRADICTS, "cant_tell") is False
+    prompt_a, _ = build_prompt("left of the cabinet", "assertion one")
+    prompt_b, _ = build_prompt("above of the desk", "a completely different assertion")
+    prefix_len = len(SELF_CHECK_PROMPT)
+    assert prompt_a[:prefix_len] == prompt_b[:prefix_len] == SELF_CHECK_PROMPT
 
 
-def test_is_failure_parse_error_always_fails():
-    assert is_failure(POLARITY_YES_NO, "PARSE_ERROR") is True
-    assert is_failure(POLARITY_CONTRADICTS, "PARSE_ERROR") is True
+def test_schema_field_order_is_evidence_then_verdict():
+    # dict insertion order matters here: it's what the guided-decoding backend is expected to
+    # honor as generation order (SPEC.md §7 item 4 -- evidence acts as a short CoT before verdict).
+    assert list(SELF_CHECK_SCHEMA["properties"].keys()) == ["evidence", "verdict"]
 
 
-def test_self_check_parses_fake_backend_response(tmp_path):
+# --- self_check(): parsing, failure classification ---------------------------------------------
+
+
+def test_is_failure_no_is_a_failure():
+    assert is_failure("no") is True
+
+
+def test_is_failure_yes_is_not_a_failure():
+    assert is_failure("yes") is False
+
+
+def test_is_failure_parse_error_counts_as_failure():
+    assert is_failure("PARSE_ERROR") is True
+
+
+def test_self_check_parses_evidence_and_verdict(tmp_path, monkeypatch):
     client = LLMClient("fake-model", backend="fake", cache_dir=tmp_path)
-    verdict = self_check(client, IMG, "some statement", POLARITY_YES_NO)
-    assert verdict == "yes"  # FakeVLMBackend's schema filler picks the first enum value
+    monkeypatch.setattr(
+        client._backend, "generate",
+        lambda *a, **k: '{"evidence": "cabinet is clearly white, not navy", "verdict": "no"}',
+    )
+    result = self_check(client, IMG, "the cabinet itself", "it is navy blue")
+    assert isinstance(result, SelfCheckResult)
+    assert result.verdict == "no"
+    assert result.evidence == "cabinet is clearly white, not navy"
 
 
 def test_self_check_returns_parse_error_on_malformed_json(tmp_path, monkeypatch):
     client = LLMClient("fake-model", backend="fake", cache_dir=tmp_path)
     monkeypatch.setattr(client._backend, "generate", lambda *a, **k: "not json at all")
-    verdict = self_check(client, IMG, "statement", POLARITY_YES_NO)
-    assert verdict == "PARSE_ERROR"
+    result = self_check(client, IMG, "region", "assertion")
+    assert result.verdict == "PARSE_ERROR"
 
 
 def test_self_check_returns_parse_error_on_missing_verdict_key(tmp_path, monkeypatch):
     client = LLMClient("fake-model", backend="fake", cache_dir=tmp_path)
-    monkeypatch.setattr(client._backend, "generate", lambda *a, **k: '{"wrong_key": "yes"}')
-    verdict = self_check(client, IMG, "statement", POLARITY_YES_NO)
-    assert verdict == "PARSE_ERROR"
+    monkeypatch.setattr(client._backend, "generate", lambda *a, **k: '{"evidence": "something"}')
+    result = self_check(client, IMG, "region", "assertion")
+    assert result.verdict == "PARSE_ERROR"
+
+
+def test_self_check_with_fake_backend_schema_filler(tmp_path):
+    # FakeVLMBackend's generic schema filler picks each property's first plausible value:
+    # "evidence" (a plain string, no enum) falls back to the "fake" placeholder, "verdict"
+    # (an enum) takes its first listed value, "yes".
+    client = LLMClient("fake-model", backend="fake", cache_dir=tmp_path)
+    result = self_check(client, IMG, "region", "assertion")
+    assert result.verdict == "yes"
