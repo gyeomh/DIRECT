@@ -1,13 +1,35 @@
-"""context_parser (SPEC.md §10): description -> (target_category, target_phrase, checklist).
+"""context_parser (SPEC.md §10): description -> (target_category, target_phrase, other_objects,
+checklist).
 
 Text-only call -- no image. Runs once per episode, at episode start.
 
 Prompt text below is used verbatim -- do not paraphrase, shorten, or "clean up" the rule lists,
 same policy as self_check.py and zone_gen.py.
+
+`other_objects` exists because the model's own prompt examples were teaching the wrong behavior:
+"cabinet with brass handles" -> Target and "bed with a blue blanket" -> "on" share the exact same
+surface form ("with X"), so a model generalizing from examples learns "with X -> Target: it has
+X" unless something forces it to separate the two cases before writing the checklist. Field order
+is generation order (same pattern as self_check's evidence-before-verdict, zone_gen's
+note-before-key): other_objects must be committed to BEFORE checklist, so a relation can't get
+silently folded into a Target-shaped sentence after the fact.
+
+That alone was not enough. Confirmed against a live server, 6 description types x 30 episodes:
+other_objects came back correct (object/cue/key all right) in nearly every case, but the model's
+own checklist still frequently failed to carry those same entries through -- either dropping them
+entirely or padding "Target" with repetitive filler instead. The failure rate tracked description
+richness almost exactly: ~0% on category/color-only descriptions (nothing relational to get
+wrong), 10-17% on single-relation descriptions, 90-93% on the two richest types that pack a color
+clause and a context clause (and sometimes a feature clause) into one sentence. So checklist's
+non-"Target" entries are no longer asked of the model at all -- they are built mechanically in
+code from other_objects (`_merge_other_objects_into_checklist`), which is the one field confirmed
+reliable. The model's checklist output is now used for "Target" only, the one thing it already
+gets right at near-0% failure.
 """
 
 import json
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, field
 
 from llm import LLMClient
 from templates import CHECKLIST_KEYS
@@ -16,6 +38,18 @@ CONTEXT_PARSER_PROMPT = """Parse an object description into a target object and 
 
 The description always describes one main target object, sometimes with other
 objects around it.
+
+=== PROCEDURE ===
+
+1. Identify the target object.
+2. List every OTHER object the description mentions. For each, note the wording
+   that links it to the target, then choose its region key.
+3. Write the target's OWN attributes as the checklist's "Target" entries.
+
+Do not repeat other_objects in the checklist -- their entries are added
+automatically from other_objects. Never describe an other_objects entry under
+"Target" either. "Target" holds only the target's own attributes and its
+integral parts.
 
 === OUTPUT FIELDS ===
 
@@ -26,7 +60,14 @@ target_phrase   — the target with attributes that belong to the target ITSELF.
                   Do NOT include clauses about other objects.
                   "navy blue cabinet under a white sink" -> "navy blue cabinet"
 
-checklist       — assertions grouped by region key.
+other_objects   — every object other than the target that the description
+                  mentions. For each: the object itself, the wording that
+                  links it to the target ("cue"), and the region key that
+                  wording implies.
+
+checklist       — the target's OWN attributes, under "Target", only. Leave out
+                  any key other than "Target" -- that content comes from
+                  other_objects, not from here.
 
 === REGION KEYS ===
 
@@ -40,6 +81,31 @@ when needed:
   "bed BESIDE a nightstand"     -> no side given                       -> "next to"
 
 Use "next to" only when the description gives no side.
+
+=== PARTS vs SEPARATE OBJECTS ===
+
+Test: could you carry it into another room and leave the target unchanged?
+
+  no  -> integral part -> "Target"
+         handles, drawers, legs, doors, frame, upholstery
+  yes -> separate object -> a region key
+         blankets, pillows, plants, books, dishes, mirrors, sinks, tables
+
+Both appear as "with X" in descriptions. The wording does not decide it.
+
+  "cabinet with brass handles"   -> handles are part of the cabinet -> Target
+  "bed with a blue blanket"      -> a blanket is a separate object  -> "on"
+
+=== NEVER PUT A RELATION IN A TARGET ASSERTION ===
+
+A "Target" assertion must not contain a spatial word: next to, beside, under,
+beneath, below, above, on, on top of, behind, in front of, near.
+
+  wrong:  Target: ["the bed is next to a nightstand"]
+  right:  next to: ["a nightstand"]
+
+  wrong:  Target: ["the bed is beneath a round mirror"]
+  right:  above: ["a round mirror"]
 
 === ASSERTION STYLE ===
 
@@ -56,74 +122,110 @@ or the target — those are added later from the region key.
 1. ATOMIC. One fact per assertion. Split compounds.
    "navy blue with brass handles" -> "it is navy blue", "it has brass handles"
 
-2. PARTS vs OBJECTS. Parts integral to the target (handles, legs, doors, frame)
-   go under "Target". Separate objects resting on it (blankets, items, plants)
-   go under "on".
+2. NO INVENTION. Add nothing the description does not state.
 
-3. NO INVENTION. Add nothing the description does not state.
-
-4. If the description names only the category, with no attributes and no other
-   objects, the checklist is empty.
+3. If the target itself has no attributes to state, leave "Target" out of the
+   checklist -- the checklist can be empty even when other_objects is not.
 
 === EXAMPLES ===
 
 "Kitchen lower cabinet"
 {"target_category": "kitchen lower cabinet",
  "target_phrase": "kitchen lower cabinet",
+ "other_objects": [],
  "checklist": {}}
 
 "Navy blue kitchen lower cabinet with brass handles"
 {"target_category": "kitchen lower cabinet",
  "target_phrase": "navy blue kitchen lower cabinet",
+ "other_objects": [],
  "checklist": {"Target": ["it is navy blue", "it has brass handles"]}}
 
 "Kitchen lower cabinet situated beneath a white countertop"
 {"target_category": "kitchen lower cabinet",
  "target_phrase": "kitchen lower cabinet",
- "checklist": {"above": ["a white countertop"]}}
+ "other_objects": [{"object": "a white countertop", "cue": "beneath", "key": "above"}],
+ "checklist": {}}
 
 "Navy blue kitchen lower cabinet under a white farmhouse sink"
 {"target_category": "kitchen lower cabinet",
  "target_phrase": "navy blue kitchen lower cabinet",
- "checklist": {"Target": ["it is navy blue"],
-               "above": ["a white farmhouse sink"]}}
+ "other_objects": [{"object": "a white farmhouse sink", "cue": "under", "key": "above"}],
+ "checklist": {"Target": ["it is navy blue"]}}
 
 "White bed with a blue blanket next to a nightstand"
 {"target_category": "bed",
  "target_phrase": "white bed",
- "checklist": {"Target": ["it is white"],
-               "on": ["a blue blanket"],
-               "next to": ["a nightstand"]}}
+ "other_objects": [{"object": "a blue blanket", "cue": "with", "key": "on"},
+                    {"object": "a nightstand", "cue": "next to", "key": "next to"}],
+ "checklist": {"Target": ["it is white"]}}
 
 "Green display cabinet next to open shelving"
 {"target_category": "display cabinet",
  "target_phrase": "green display cabinet",
- "checklist": {"Target": ["it is green"],
-               "next to": ["open shelving"]}}"""
+ "other_objects": [{"object": "open shelving", "cue": "next to", "key": "next to"}],
+ "checklist": {"Target": ["it is green"]}}
 
-# checklist keys are pinned to the 11-key enum (templates.CHECKLIST_KEYS) via additionalProperties:
-# False + an explicit property per key -- there is no per-key "required", since only the region
-# keys the description actually mentions should appear (rule 4: category-only -> checklist == {}).
-#
-# maxItems=8 on each key's array: confirmed against a live vllm==0.15.0 server that without it,
+"Dark gray slatted heater beneath a round mirror"
+{"target_category": "heater",
+ "target_phrase": "dark gray slatted heater",
+ "other_objects": [{"object": "a round mirror", "cue": "beneath", "key": "above"}],
+ "checklist": {"Target": ["it is dark gray", "it is slatted"]}}
+
+"Large beige carpet under a wooden coffee table"
+{"target_category": "carpet",
+ "target_phrase": "large beige carpet",
+ "other_objects": [{"object": "a wooden coffee table", "cue": "under", "key": "above"}],
+ "checklist": {"Target": ["it is large", "it is beige"]}}
+
+"Gray couch with pillows under three framed artworks"
+{"target_category": "couch",
+ "target_phrase": "gray couch",
+ "other_objects": [{"object": "pillows", "cue": "with", "key": "on"},
+                    {"object": "three framed artworks", "cue": "under", "key": "above"}],
+ "checklist": {"Target": ["it is gray"]}}"""
+
+# maxItems=8 on both arrays below: confirmed against a live vllm==0.15.0 server that without it,
 # the model can enter a token-repetition loop (the same assertion string appended dozens of
 # times) that a strict json_schema grammar does nothing to stop -- an unbounded array is a valid
 # completion at every step, so it runs until max_tokens truncates the response mid-string and it
-# fails to parse entirely. No real description needs more than a handful of atomic facts per key.
+# fails to parse entirely. No real description needs more than a handful of items per key.
 _CHECKLIST_VALUE_SCHEMA = {"type": "array", "items": {"type": "string"}, "maxItems": 8}
 
+# other_objects' own "key" is never "Target" -- these are explicitly objects OTHER than the
+# target, so "Target" is not a meaningful choice for where they'd file in the checklist.
+_RELATION_KEYS_NO_TARGET = tuple(k for k in CHECKLIST_KEYS if k != "Target")
+
+_OTHER_OBJECT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "object": {"type": "string", "description": "The other object mentioned in the description."},
+        "cue": {"type": "string", "description": "The exact wording linking it to the target."},
+        "key": {"type": "string", "enum": list(_RELATION_KEYS_NO_TARGET)},
+    },
+    "required": ["object", "cue", "key"],
+}
+
+# checklist keys are pinned to the 11-key enum (templates.CHECKLIST_KEYS) via additionalProperties:
+# False + an explicit property per key -- there is no per-key "required", since only the region
+# keys the description actually mentions should appear (rule 3: category-only -> checklist == {}).
 CONTEXT_PARSER_SCHEMA = {
     "type": "object",
     "properties": {
         "target_category": {"type": "string", "description": "Bare category noun phrase, no attributes."},
         "target_phrase": {"type": "string", "description": "Target with its own attributes; no clauses about other objects."},
+        "other_objects": {
+            "type": "array",
+            "items": _OTHER_OBJECT_SCHEMA,
+            "maxItems": 8,
+        },
         "checklist": {
             "type": "object",
             "properties": {k: _CHECKLIST_VALUE_SCHEMA for k in CHECKLIST_KEYS},
             "additionalProperties": False,
         },
     },
-    "required": ["target_category", "target_phrase", "checklist"],
+    "required": ["target_category", "target_phrase", "other_objects", "checklist"],
 }
 
 
@@ -136,7 +238,10 @@ class ContextParserError(Exception):
 class ParsedContext:
     target_category: str  # bare noun phrase -- feeds zone_gen.locate (SPEC.md §5-1)
     target_phrase: str  # target + its own attributes -- feeds templates.region_for/question_for
+    other_objects: list  # [{"object": ..., "cue": ..., "key": ...}, ...], as returned
     checklist: dict  # {region_key: [assertion, ...]}; only keys from templates.CHECKLIST_KEYS
+    validation_problems: list = field(default_factory=list)  # non-empty if still flagged post-retry
+    retried: bool = False  # True iff the first attempt was flagged and a retry was made
 
 
 def build_prompt(description: str) -> tuple:
@@ -144,19 +249,97 @@ def build_prompt(description: str) -> tuple:
     return prompt, CONTEXT_PARSER_SCHEMA
 
 
-def parse_context(llm_client: LLMClient, description: str) -> ParsedContext:
+# Word-boundary matched against a lowercased Target assertion. "on" alone would false-positive
+# inside ordinary words (e.g. "wooden"), hence \b on both sides via the regex build below.
+_SPATIAL_WORDS = [
+    "next to", "beside", "under", "beneath", "below", "above",
+    "on top of", "on", "behind", "in front of", "near",
+]
+
+
+def _target_assertions_with_spatial_words(checklist: dict) -> list:
+    """Detects the one remaining failure mode this module's prompt redesign targets: a relation
+    reworded into a Target-shaped sentence instead of listed in other_objects. (The other original
+    failure mode -- an other_objects entry never making it into the checklist -- is now prevented
+    by construction: _merge_other_objects_into_checklist builds those entries in code, it never
+    trusts the model to restate them.)"""
+    hits = []
+    for assertion in checklist.get("Target", []):
+        lowered = assertion.lower()
+        for word in _SPATIAL_WORDS:
+            if re.search(rf"\b{re.escape(word)}\b", lowered):
+                hits.append((assertion, word))
+                break
+    return hits
+
+
+def _validate(checklist: dict) -> list:
+    problems = []
+    for assertion, word in _target_assertions_with_spatial_words(checklist):
+        problems.append(f"Target assertion {assertion!r} contains spatial word {word!r}")
+    return problems
+
+
+def _merge_other_objects_into_checklist(other_objects: list, model_checklist: dict) -> dict:
+    """checklist's non-"Target" entries are built here, in code, from other_objects -- never
+    trusted from the model's own checklist output. Confirmed against a live server, 6 description
+    types x 30 episodes: other_objects came back correct in nearly every case while the model's
+    own checklist failed to carry those same entries through 35% of the time overall (90%+ on the
+    two richest description types). "Target" is the one part of checklist still taken from the
+    model, since it's the one part confirmed reliable (~0% failure on category/color-only
+    descriptions, where there's nothing relational to get wrong).
+
+    Dedup is exact-match after case/whitespace normalization (same style as checklist_update.py)
+    -- a cheap safety net against two other_objects entries coincidentally naming the same thing
+    under the same key, not expected to fire often.
+    """
+    merged = {}
+    target = model_checklist.get("Target") or []
+    if target:
+        merged["Target"] = list(target)
+
+    for obj in other_objects:
+        bucket = merged.setdefault(obj["key"], [])
+        normalized_existing = {re.sub(r"\s+", " ", a.strip().lower()) for a in bucket}
+        normalized_candidate = re.sub(r"\s+", " ", obj["object"].strip().lower())
+        if normalized_candidate not in normalized_existing:
+            bucket.append(obj["object"])
+
+    return merged
+
+
+def _call_and_parse(llm_client: LLMClient, description: str, *, use_cache: bool) -> tuple:
     prompt, schema = build_prompt(description)
-    result = llm_client.call(prompt, image=None, response_schema=schema)
+    result = llm_client.call(prompt, image=None, response_schema=schema, use_cache=use_cache)
     try:
         parsed = json.loads(result.text)
-        # Drop any empty-list entries: a real server that fills every schema property rather than
-        # omitting unused ones would otherwise leave category-only descriptions with 11 empty
-        # keys instead of {} (rule 4) -- normalize both shapes to the same thing here.
-        checklist = {k: v for k, v in parsed["checklist"].items() if v}
-        return ParsedContext(
-            target_category=parsed["target_category"],
-            target_phrase=parsed["target_phrase"],
-            checklist=checklist,
-        )
+        other_objects = parsed["other_objects"]
+        checklist = _merge_other_objects_into_checklist(other_objects, parsed["checklist"])
+        return parsed["target_category"], parsed["target_phrase"], other_objects, checklist
     except (json.JSONDecodeError, KeyError, TypeError) as e:
         raise ContextParserError(f"context_parser: malformed response for description={description!r}: {result.text!r}") from e
+
+
+def parse_context(llm_client: LLMClient, description: str) -> ParsedContext:
+    target_category, target_phrase, other_objects, checklist = _call_and_parse(llm_client, description, use_cache=True)
+    problems = _validate(checklist)
+    retried = False
+
+    if problems:
+        # One retry, bypassing the cache -- a cache hit would just replay the same flagged
+        # response verbatim. temperature=0.0 (llm.py) makes this a defense against
+        # serving-time nondeterminism rather than a guaranteed fix, not a reclassification step.
+        retried = True
+        target_category, target_phrase, other_objects, checklist = _call_and_parse(llm_client, description, use_cache=False)
+        problems = _validate(checklist)
+        if problems:
+            print(f"[WARN] context_parser: validation still failing after retry for description={description!r}: {problems}")
+
+    return ParsedContext(
+        target_category=target_category,
+        target_phrase=target_phrase,
+        other_objects=other_objects,
+        checklist=checklist,
+        validation_problems=problems,
+        retried=retried,
+    )

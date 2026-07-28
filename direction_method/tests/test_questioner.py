@@ -49,6 +49,7 @@ class ScriptedBackend:
         target_category="kitchen lower cabinet",
         target_phrase="navy blue kitchen lower cabinet",
         checklist=None,
+        other_objects=None,
         self_check_verdicts=None,
         locate_boxes=None,
         zones_regions=None,
@@ -56,7 +57,11 @@ class ScriptedBackend:
     ):
         self.target_category = target_category
         self.target_phrase = target_phrase
+        # context_parser.py merges non-"Target" checklist keys from other_objects only (§10) --
+        # to seed an existing non-Target checklist entry, pass other_objects, not a raw checklist
+        # dict with that key; checklist itself is only ever used here to seed "Target".
         self.checklist = checklist if checklist is not None else {}
+        self.other_objects = other_objects if other_objects is not None else []
         # Popped in call order; None left in the queue after exhaustion defaults to "yes".
         self.self_check_verdicts = list(self_check_verdicts) if self_check_verdicts is not None else []
         self.locate_boxes = (
@@ -72,6 +77,7 @@ class ScriptedBackend:
             return json.dumps({
                 "target_category": self.target_category,
                 "target_phrase": self.target_phrase,
+                "other_objects": self.other_objects,
                 "checklist": self.checklist,
             })
         if "You verify a single claim against an image" in prompt:
@@ -262,7 +268,7 @@ def test_all_relations_pass_concludes_match(tmp_path):
 def test_relation_already_a_checklist_parent_key_is_not_asked_again(tmp_path):
     q, scripted = make_questioner(
         tmp_path,
-        checklist={"left": ["wooden tiles"]},
+        other_objects=[{"object": "wooden tiles", "cue": "on", "key": "left"}],
         self_check_verdicts=["yes"],  # Step 2's one assertion passes
         zones_regions=[{"note": "n", "key": "left"}, {"note": "n2", "key": "above"}],
     )

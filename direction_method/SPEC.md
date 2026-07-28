@@ -404,7 +404,45 @@ Input: the description string. Text-only call — **no image**. Runs once per ep
 start. Prompt text is kept verbatim in `context_parser.py` (`CONTEXT_PARSER_PROMPT`), same policy
 as `self_check` (§7) and `zone_gen` (§5).
 
-**Output, three fields:**
+**The core failure this module's design defends against, found against the real model:** its own
+first-draft prompt taught the wrong behavior by example. `"cabinet with brass handles"` →
+`Target: "it has brass handles"` and `"bed with a blue blanket"` → `on: "a blue blanket"` share
+the identical surface form (`"with X"`), so a model generalizing from examples learns `"with X" →
+Target: "it has X"` regardless of the rule text saying otherwise — a rule loses to an example that
+contradicts it. Confirmed on the real model: `"White bed with a blue blanket next to a nightstand"`
+came back as `{"Target": ["it is white", "it has a blue blanket", "it is next to a nightstand"]}`
+— every relational fact reworded into a `Target`-shaped sentence and dumped under `Target`, and
+`"the bed is next to a nightstand"` reads as perfectly natural English, so nothing about the
+sentence's fluency signals that it's misfiled. This is a **silent** failure: the JSON is valid,
+parses fine, and is semantically not obviously wrong — invisible unless someone reads the output
+by hand.
+
+**First fix attempt: `other_objects`, a field the model must fill in before `checklist`.** Field
+order is generation order — same pattern as `self_check`'s evidence-before-verdict and `zone_gen`'s
+note-before-key — so every object other than the target gets named, with the wording that links
+it to the target (`cue`) and the region key that wording implies, *before* the model is allowed to
+write the checklist. This alone was not enough. Confirmed against a live server, 6 description
+types × 30 episodes: `other_objects` itself came back correct (object/cue/key all right) in nearly
+every case, but the model's own `checklist` still frequently failed to carry those same entries
+through — sometimes dropping them entirely, sometimes padding `Target` with repetitive filler
+instead. The failure rate tracked description richness almost exactly:
+
+| description type | flag rate |
+|---|---|
+| category, color (no relation to get wrong) | 0% |
+| context, color_feature (one relation) | 10–17% |
+| color_context, color_context_feature (color + context clauses combined) | 90–93% |
+
+**Second, working fix: stop asking the model to write the relational entries twice.**
+`checklist`'s non-`"Target"` entries are now built **mechanically in code**
+(`_merge_other_objects_into_checklist`) directly from `other_objects` — never taken from the
+model's own `checklist` output for any key other than `"Target"`. The model's `checklist` field is
+now used for `"Target"` only, the one part already confirmed reliable (~0% failure on
+category/color-only descriptions, where there's nothing relational to get wrong). Any non-`Target`
+key the model writes anyway is discarded, not merged in — trusting it selectively would just
+reintroduce the same inconsistency in a different shape.
+
+**Output, four fields, in this order:**
 
 - `target_category` — the bare category noun phrase, no attributes. Feeds `zone_gen.locate` (§5-1)
   — grounding must use this, never `target_phrase`, since attributes make grounding fail on exactly
@@ -412,23 +450,53 @@ as `self_check` (§7) and `zone_gen` (§5).
 - `target_phrase` — the target with attributes that belong to the target itself only, no clauses
   about other objects. Feeds `region_for`/`question_for` (§6) as `{t}` everywhere else in the
   pipeline.
-- `checklist` — assertions grouped by region key, from the target's point of view (the prompt
-  reverses the description's wording when needed, e.g. "cabinet under a countertop" → the
-  countertop is `above` the cabinet). Region keys are pinned to the same 11-key enum as
-  `templates.CHECKLIST_KEYS` (§6) — schema enforces this via `additionalProperties: false` plus an
-  explicit property per key, rather than a free-form string key. `next to` is used only when the
-  description gives no side; category-only descriptions ("Kitchen lower cabinet") produce an empty
-  checklist.
+- `other_objects` — `[{"object": ..., "cue": ..., "key": ...}, ...]`, every object other than the
+  target the description mentions. `key` is enum-pinned to the 10-key relation vocabulary
+  (`templates.CHECKLIST_KEYS` minus `"Target"` — an object other than the target is never itself
+  the `Target` node). Field order within each item (`object`, then `cue`, then `key`) mirrors the
+  outer field order: name the object and the literal linking wording before committing to a key.
+  This is the field the merge trusts.
+- `checklist` — the model writes `"Target"` only (its own attributes and integral parts); every
+  other key is filled in afterward from `other_objects`, not asked of the model at all. `next to`
+  is used only when the description gives no side; a description with no target-only attributes
+  produces an empty (or `Target`-only) model checklist, which is fine — the checklist can still end
+  up with real content once the merge adds `other_objects`' entries.
+
+**`=== PARTS vs SEPARATE OBJECTS ===`** replaces the old "parts go under Target" rule with a test
+that doesn't depend on wording: *could you carry it into another room and leave the target
+unchanged?* No → integral part → `Target` (handles, drawers, legs, doors, frame, upholstery). Yes
+→ separate object → a region key, i.e. `other_objects` (blankets, pillows, plants, books, dishes,
+mirrors, sinks, tables). Both can appear as `"with X"` — the wording never decides it, only the
+test does.
+
+**`=== NEVER PUT A RELATION IN A TARGET ASSERTION ===`** is a direct, checkable constraint: a
+`Target` assertion must not contain a spatial word (`next to, beside, under, beneath, below,
+above, on, on top of, behind, in front of, near`). This is the one failure mode left uncovered by
+the code-level merge (the merge fixes `other_objects` never reaching the checklist; it does
+nothing about a relation *also* getting reworded into a `Target` sentence), and is exactly what the
+validator below still checks for.
 
 Assertions follow the same atomic, region-stripped style as everywhere else in the checklist (§2):
-a short phrase, not a sentence, that does not restate the region or the target. Parts integral to
-the target (handles, legs, doors, frame) go under `Target`; separate objects resting on it go under
-`on`. No invention — nothing the description doesn't state.
+a short phrase, not a sentence, that does not restate the region or the target. No invention —
+nothing the description doesn't state.
 
-**Normalization outside the VLM call:** any checklist entry with an empty assertion list is
-dropped. This guards against a real server that fills every schema property (rather than omitting
-ones the description didn't mention) — an all-11-keys-present-but-mostly-empty response and a
-`{}` response must normalize to the same thing.
+**Validator: detection only, never reclassification, and now single-purpose.** One check remains
+(the "does every `other_objects` entry reach the checklist" check is gone — the merge makes that
+true by construction, so checking it would never fire): does any `Target` assertion contain a
+spatial word? If it does, `parse_context` retries **once**, bypassing the disk cache (a cache hit
+would just replay the identical flagged response — `llm.py`'s cache key has no temperature
+component, and `temperature=0.0` here, so this is a defense against serving-time nondeterminism,
+not a guaranteed fix — confirmed on the real model that the retry recovers **0** of the cases it's
+triggered on, at temperature 0). If the retry is still flagged, `parse_context` logs a `[WARN]`
+line and **returns the result anyway** — `ParsedContext.validation_problems` carries whatever was
+found, so a caller can inspect or count it, but nothing here silently rewrites the model's output.
+
+**maxItems=8** on `checklist`'s per-key arrays and on `other_objects` itself: confirmed against a
+live server that an unbounded array lets the model enter a token-repetition loop (the same
+assertion string appended dozens of times) that a strict `json_schema` grammar does nothing to
+stop, since an unbounded array is a valid completion at every generation step — it runs until
+`max_tokens` truncates the response mid-string and the whole thing fails to parse (3/11 hand-picked
+descriptions crashed this way before the cap was added).
 
 ---
 
@@ -439,17 +507,15 @@ ones the description didn't mention) — an all-11-keys-present-but-mostly-empty
 - Whether the edge-touch leak logged by `zone_gen`'s geometry cross-check (§5-2) is frequent enough
   to warrant filtering — decide from the logged frequency once more real numbers exist (6/25 in
   the first real sample; see the real-server section below).
-- **`context_parser` unreliably files relational facts under `Target` instead of their own key.**
-  Confirmed against the real model: "White bed with a blue blanket next to a nightstand" produced
-  `{"Target": ["it is white", "it has a blue blanket", "it is next to a nightstand"]}` instead of
-  the spec's own worked example (`{"Target": ["it is white"], "on": ["a blue blanket"], "next to":
-  ["a nightstand"]}`, §10) — every relational fact got reworded into a Target-shaped sentence and
-  dumped under `Target` rather than split into its own region key. Same pattern on "Dark gray
-  slatted heater beneath a round mirror" (no `above` key at all) and "Large beige carpet under a
-  wooden coffee table" (no `above` key). This is a real prompt-following gap, not a crash — the
-  JSON is valid and parses fine, it's just the wrong shape. Needs a decision (tighten the prompt's
-  worked examples further, or add a post-hoc key-reassignment heuristic) before relying on
-  `context_parser`'s relational checklist entries for anything.
+- **Resolved.** `context_parser`'s relation-vs-`Target` filing problem (§10): the `other_objects`
+  field alone (prompt-level fix) cut nothing on its own — confirmed at 6 types × 30 episodes, 35%
+  overall flag rate, 90%+ on the two richest description types. Moving checklist's non-`Target`
+  entries out of the model's hands entirely (built in code from `other_objects` instead) dropped
+  that to **0.6% (1/180)** on the same real sweep, and the one remaining flag is the expected false-
+  positive class of the word-list validator (`"a knight on horseback"` — the target's own subject
+  matter, correctly kept in `Target`, incorrectly flagged for containing "on") rather than a real
+  filing error. No further action planned unless this class of false positive turns out to be
+  more common than this one sample suggests.
 - `checklist_update` misfiled one case in five hand-built examples: the mandatory first/target
   question's own answer landed under `on` instead of `Target` (rule 2, "keep the asked key," not
   followed for that one case). The other four (atomic splitting, empty-region wording, duplicate
