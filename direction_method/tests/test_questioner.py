@@ -448,3 +448,87 @@ def test_invariant_holds_across_many_varied_scenarios(tmp_path):
             answer = "some answer"
         else:
             raise AssertionError("scenario did not conclude within 10 calls")
+
+
+# --- rich logging: interactions, checklist snapshots, zone_gen detail -------------------------
+
+
+def test_context_parser_result_and_initial_checklist_are_exposed(tmp_path):
+    q, _ = make_questioner(tmp_path, checklist={"Target": ["it is navy blue"]})
+    assert q.context_parser_result.target_category == q.target_category
+    assert q.initial_checklist == {"Target": ["it is navy blue"]}
+
+
+def test_initial_checklist_snapshot_is_not_mutated_by_later_growth(tmp_path):
+    q, scripted = make_questioner(
+        tmp_path, checklist={}, zones_regions=[], checklist_additions={"Target": ["it is navy blue"]},
+    )
+    answer = None
+    for _ in range(10):
+        a = call(q, IMG_A, answer=answer)
+        if a["conclusion"] is not None:
+            break
+        answer = "some answer"
+    assert q.initial_checklist == {}  # unchanged even though q.checklist grew
+    assert q.checklist != {}
+
+
+def test_checklist_check_interaction_is_logged_with_full_detail(tmp_path):
+    q, scripted = make_questioner(
+        tmp_path, checklist={"Target": ["it is navy blue"]}, self_check_verdicts=["no"],
+    )
+    call(q, IMG_A, answer=None)
+    interactions = q.candidate_logs[0].interactions
+    assert interactions == [{
+        "type": "checklist_check",
+        "parent_key": "Target",
+        "assertion": "it is navy blue",
+        "region": "the navy blue kitchen lower cabinet itself",
+        "verdict": "no",
+        "evidence": "e",
+    }]
+
+
+def test_relation_answer_check_interaction_is_logged_with_full_detail(tmp_path):
+    q, scripted = make_questioner(
+        tmp_path, checklist={}, zones_regions=[{"note": "n", "key": "left"}], self_check_verdicts=["yes"],
+    )
+    call(q, IMG_A, answer=None)  # asks Target
+    call(q, IMG_A, answer="a navy blue cabinet")  # answers Target, asks left
+    call(q, IMG_A, answer="a wooden table")  # answers left
+
+    interactions = q.candidate_logs[0].interactions
+    assert [i["type"] for i in interactions] == ["relation_answer_check", "relation_answer_check"]
+    assert interactions[0]["relation"] == "Target"
+    assert interactions[0]["question"] == "Can you describe the navy blue kitchen lower cabinet's location and visual appearance (e.g., color, shape, size)."
+    assert interactions[0]["answer"] == "a navy blue cabinet"
+    assert interactions[0]["verdict"] == "yes"
+    assert interactions[1]["relation"] == "left"
+    assert interactions[1]["answer"] == "a wooden table"
+
+
+def test_zone_gen_detail_logged_on_candidate(tmp_path):
+    q, scripted = make_questioner(
+        tmp_path, checklist={}, zones_regions=[{"note": "a lamp", "key": "left"}],
+    )
+    call(q, IMG_A, answer=None)
+    log = q._candidate.log  # the still-open candidate (not yet concluded/appended)
+    assert log.bbox_2d == (200, 200, 800, 800)
+    assert log.zone_list == ["left"]
+    assert log.scene == "s"
+    assert log.boxed_image is not None
+
+
+def test_checklist_before_and_after_snapshots_on_candidate_log(tmp_path):
+    q, scripted = make_questioner(
+        tmp_path, checklist={}, zones_regions=[], checklist_additions={"Target": ["it is navy blue"]},
+    )
+    answer = None
+    for _ in range(10):
+        a = call(q, IMG_A, answer=answer)
+        if a["conclusion"] is not None:
+            break
+        answer = "some answer"
+    log = q.candidate_logs[0]
+    assert log.checklist_before == {}
+    assert log.checklist_after == q.checklist
