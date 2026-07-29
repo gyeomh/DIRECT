@@ -82,6 +82,9 @@ LOCATE_SCHEMA = {
     "properties": {
         "boxes": {
             "type": "array",
+            # maxItems: same repetition-loop guard as context_parser/checklist_update -- this
+            # array had no bound at all before, the original unbounded-array failure mode.
+            "maxItems": 10,
             "items": {
                 "type": "object",
                 "properties": {
@@ -91,8 +94,8 @@ LOCATE_SCHEMA = {
                         "minItems": 4,
                         "maxItems": 4,
                     },
-                    "label": {"type": "string"},
-                    "note": {"type": "string", "description": "Under 10 words. What was boxed."},
+                    "label": {"type": "string", "maxLength": 200},
+                    "note": {"type": "string", "maxLength": 200, "description": "Under 10 words. What was boxed."},
                 },
                 "required": ["bbox_2d", "label", "note"],
             },
@@ -163,6 +166,7 @@ ZONES_SCHEMA = {
     "properties": {
         "scene": {
             "type": "string",
+            "maxLength": 200,
             "description": "Under 20 words. Target's position in the frame and which edges it touches or comes close to.",
         },
         "regions": {
@@ -171,7 +175,7 @@ ZONES_SCHEMA = {
             "items": {
                 "type": "object",
                 "properties": {
-                    "note": {"type": "string", "description": "Under 10 words. What is actually in that region."},
+                    "note": {"type": "string", "maxLength": 200, "description": "Under 10 words. What is actually in that region."},
                     "key": {"type": "string", "enum": REGION_KEYS},
                 },
                 "required": ["note", "key"],

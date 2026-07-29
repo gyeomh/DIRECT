@@ -190,7 +190,14 @@ or the target — those are added later from the region key.
 # times) that a strict json_schema grammar does nothing to stop -- an unbounded array is a valid
 # completion at every step, so it runs until max_tokens truncates the response mid-string and it
 # fails to parse entirely. No real description needs more than a handful of items per key.
-_CHECKLIST_VALUE_SCHEMA = {"type": "array", "items": {"type": "string"}, "maxItems": 8}
+#
+# maxLength=200 on every string field in this module: maxItems alone was NOT sufficient --
+# reproduced on checklist_update.py's identically-shaped schema during the full 167-episode real
+# sweep, where the model instead degenerated WITHIN a single string (repeating the same clause
+# over and over) rather than across array items, still truncating mid-string since maxItems never
+# bounds a string's own length. Applied here too, defensively, before the same failure mode shows
+# up in this module's own strings under the larger sample.
+_CHECKLIST_VALUE_SCHEMA = {"type": "array", "items": {"type": "string", "maxLength": 200}, "maxItems": 8}
 
 # other_objects' own "key" is never "Target" -- these are explicitly objects OTHER than the
 # target, so "Target" is not a meaningful choice for where they'd file in the checklist.
@@ -199,8 +206,8 @@ _RELATION_KEYS_NO_TARGET = tuple(k for k in CHECKLIST_KEYS if k != "Target")
 _OTHER_OBJECT_SCHEMA = {
     "type": "object",
     "properties": {
-        "object": {"type": "string", "description": "The other object mentioned in the description."},
-        "cue": {"type": "string", "description": "The exact wording linking it to the target."},
+        "object": {"type": "string", "maxLength": 200, "description": "The other object mentioned in the description."},
+        "cue": {"type": "string", "maxLength": 200, "description": "The exact wording linking it to the target."},
         "key": {"type": "string", "enum": list(_RELATION_KEYS_NO_TARGET)},
     },
     "required": ["object", "cue", "key"],
@@ -212,8 +219,8 @@ _OTHER_OBJECT_SCHEMA = {
 CONTEXT_PARSER_SCHEMA = {
     "type": "object",
     "properties": {
-        "target_category": {"type": "string", "description": "Bare category noun phrase, no attributes."},
-        "target_phrase": {"type": "string", "description": "Target with its own attributes; no clauses about other objects."},
+        "target_category": {"type": "string", "maxLength": 200, "description": "Bare category noun phrase, no attributes."},
+        "target_phrase": {"type": "string", "maxLength": 200, "description": "Target with its own attributes; no clauses about other objects."},
         "other_objects": {
             "type": "array",
             "items": _OTHER_OBJECT_SCHEMA,
