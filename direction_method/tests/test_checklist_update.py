@@ -1,60 +1,9 @@
-import json
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import pytest
-
-from checklist_update import (
-    CHECKLIST_UPDATE_PROMPT,
-    CHECKLIST_UPDATE_SCHEMA,
-    ChecklistUpdateError,
-    build_prompt,
-    checklist_update,
-    merge_checklist,
-)
-from llm import LLMClient
-from templates import CHECKLIST_KEYS
-
-
-def fake_client(tmp_path) -> LLMClient:
-    return LLMClient("fake-model", backend="fake", cache_dir=tmp_path)
-
-
-# --- prompt construction ------------------------------------------------------------------
-
-
-def test_build_prompt_contains_verbatim_system_prompt():
-    prompt, schema = build_prompt({}, [])
-    assert prompt.startswith(CHECKLIST_UPDATE_PROMPT)
-    assert schema == CHECKLIST_UPDATE_SCHEMA
-
-
-def test_build_prompt_formats_current_checklist_one_line_per_assertion():
-    checklist = {"Target": ["it is navy blue", "it has brass handles"], "above": ["a white sink"]}
-    prompt, _ = build_prompt(checklist, [])
-    assert "current checklist:\nTarget: it is navy blue\nTarget: it has brass handles\nabove: a white sink" in prompt
-
-
-def test_build_prompt_formats_new_answers_by_relation():
-    prompt, _ = build_prompt({}, [("left", "a wooden table with a plant on it"), ("on", "nothing visible")])
-    assert "new answers:\nleft: a wooden table with a plant on it\non: nothing visible" in prompt
-
-
-def test_build_prompt_empty_checklist_and_answers():
-    prompt, _ = build_prompt({}, [])
-    assert prompt.endswith("current checklist:\n\n\nnew answers:\n")
-
-
-# --- schema shape --------------------------------------------------------------------------
-
-
-def test_schema_pins_additions_keys_to_the_11_key_enum():
-    additions_schema = CHECKLIST_UPDATE_SCHEMA["properties"]["additions"]
-    assert additions_schema["additionalProperties"] is False
-    assert set(additions_schema["properties"].keys()) == set(CHECKLIST_KEYS)
-    assert len(CHECKLIST_KEYS) == 11
+from checklist_update import checklist_update, merge_checklist
 
 
 # --- merge_checklist: append-only, dedup, superset invariant --------------------------------
@@ -120,50 +69,70 @@ def test_merge_with_no_additions_is_a_no_op():
     assert merged is not checklist  # still a fresh dict, per the "never mutate input" contract
 
 
-# --- checklist_update(): end to end ---------------------------------------------------------
+# --- checklist_update(): files each answer under its OWN already-known key, verbatim --------
+#
+# No LLM call, no key classification -- `relation` in each (relation, answer) pair IS the
+# checklist key. Confirmed against the real full sweep: the previous LLM-driven design misfiled
+# content under the wrong key 51.5% of the time content grew at all. These tests exercise the
+# code-only replacement.
 
 
-def test_checklist_update_parses_and_merges_additions(tmp_path, monkeypatch):
-    client = fake_client(tmp_path)
-    payload = {"additions": {"left": ["a wooden table"], "on": ["nothing visible"]}}
-    monkeypatch.setattr(client._backend, "generate", lambda *a, **k: json.dumps(payload))
+def test_checklist_update_files_answer_under_its_own_relation_key():
+    checklist = {}
+    updated = checklist_update(checklist, [("left", "a mirror with a white frame")])
+    assert updated == {"left": ["a mirror with a white frame"]}
 
+
+def test_checklist_update_keeps_the_answer_verbatim_no_rephrasing():
+    checklist = {}
+    raw_answer = "There is nothing on top of the black TV. It is a flat screen with a black frame."
+    updated = checklist_update(checklist, [("on", raw_answer)])
+    assert updated["on"] == [raw_answer]
+
+
+def test_checklist_update_never_files_an_answer_under_a_different_key_than_asked():
+    # The exact real-sweep failure mode this replaces: an answer to "what is on the left" must
+    # never end up under "left-bottom" or any other key.
+    checklist = {}
+    updated = checklist_update(checklist, [("left", "a mirror"), ("right", "a potted plant")])
+    assert updated == {"left": ["a mirror"], "right": ["a potted plant"]}
+    assert "left-bottom" not in updated
+    assert "right-bottom" not in updated
+
+
+def test_checklist_update_appends_to_an_existing_key():
+    checklist = {"Target": ["it is black"]}
+    updated = checklist_update(checklist, [("below", "a wooden dresser")])
+    assert updated == {"Target": ["it is black"], "below": ["a wooden dresser"]}
+
+
+def test_checklist_update_handles_multiple_answers_for_the_same_relation_in_one_round():
+    checklist = {}
+    updated = checklist_update(checklist, [("on", "a lamp"), ("on", "a book")])
+    assert updated["on"] == ["a lamp", "a book"]
+
+
+def test_checklist_update_dedups_an_exact_repeat_answer():
+    checklist = {"left": ["a mirror"]}
+    updated = checklist_update(checklist, [("left", "a mirror")])
+    assert updated["left"] == ["a mirror"]
+
+
+def test_checklist_update_is_a_no_op_on_empty_round_answers():
     checklist = {"Target": ["it is navy blue"]}
-    updated = checklist_update(client, checklist, [("left", "a wooden table"), ("on", "there is nothing on it")])
-    assert updated == {
-        "Target": ["it is navy blue"],
-        "left": ["a wooden table"],
-        "on": ["nothing visible"],
-    }
+    result = checklist_update(checklist, [])
+    assert result is checklist  # untouched, returned as-is, no work done
 
 
-def test_checklist_update_skips_the_vlm_call_when_round_answers_is_empty(tmp_path, monkeypatch):
-    client = fake_client(tmp_path)
-    calls = []
-    monkeypatch.setattr(client._backend, "generate", lambda *a, **k: calls.append(1) or "{}")
-
+def test_checklist_update_does_not_mutate_the_input_checklist():
     checklist = {"Target": ["it is navy blue"]}
-    result = checklist_update(client, checklist, [])
-    assert result is checklist  # untouched, returned as-is
-    assert calls == []
+    checklist_update(checklist, [("left", "a table")])
+    assert checklist == {"Target": ["it is navy blue"]}
 
 
-def test_checklist_update_raises_on_malformed_json(tmp_path, monkeypatch):
-    client = fake_client(tmp_path)
-    monkeypatch.setattr(client._backend, "generate", lambda *a, **k: "not json")
-    with pytest.raises(ChecklistUpdateError):
-        checklist_update(client, {}, [("left", "a table")])
+def test_checklist_update_takes_no_llm_client_argument():
+    # The whole point of the fix: there is no classification step left to call an LLM for.
+    import inspect
 
-
-def test_checklist_update_raises_on_missing_additions_key(tmp_path, monkeypatch):
-    client = fake_client(tmp_path)
-    monkeypatch.setattr(client._backend, "generate", lambda *a, **k: json.dumps({"wrong_key": {}}))
-    with pytest.raises(ChecklistUpdateError):
-        checklist_update(client, {}, [("left", "a table")])
-
-
-def test_checklist_update_with_fake_backend_schema_filler_does_not_crash(tmp_path):
-    client = fake_client(tmp_path)
-    updated = checklist_update(client, {}, [("left", "a wooden table")])
-    # FakeVLM's filler fills every additions property with a 1-item list -- all 11 keys appear
-    assert set(updated.keys()) == set(CHECKLIST_KEYS)
+    params = list(inspect.signature(checklist_update).parameters)
+    assert params == ["checklist", "round_answers"]
