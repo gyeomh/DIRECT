@@ -172,3 +172,31 @@ def test_env_var_selects_fake_backend(tmp_path, monkeypatch):
 
     client = LLMClient("fake-model-name-unused", cache_dir=tmp_path)
     assert isinstance(client._backend, FakeVLMBackend)
+
+
+def test_concurrent_calls_sharing_a_cache_key_do_not_crash(tmp_path):
+    """Regression test: two threads racing _store_cache for the identical cache key (same
+    prompt+image -- realistic under the full-sweep driver's ThreadPoolExecutor, e.g. two
+    episode-runs asking the exact same self_check question against the same target image) used
+    to collide on a tmp path keyed only by os.getpid(), which every thread in one process shares.
+    The loser's tmp_path.replace() then raised FileNotFoundError because the winner had already
+    renamed the shared tmp file away. Fixed by keying the tmp suffix on threading.get_ident() too.
+    """
+    import threading
+
+    client = LLMClient("fake-model", backend="fake", cache_dir=tmp_path, timeout_s=5.0)
+    errors = []
+
+    def worker():
+        try:
+            client.call("identical prompt for every thread", IMG, use_cache=True)
+        except Exception as e:  # noqa: BLE001 -- the test's whole point is that this must not happen
+            errors.append(e)
+
+    threads = [threading.Thread(target=worker) for _ in range(16)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert errors == []

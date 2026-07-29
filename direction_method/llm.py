@@ -18,6 +18,7 @@ import hashlib
 import json
 import os
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -215,8 +216,12 @@ class LLMClient:
     def _store_cache(self, key: str, text: str) -> None:
         # Write-then-rename: a crash partway through json.dump must not leave a truncated file
         # at the real cache path (it would read back as corrupt on every future call for this key).
+        # Suffix must be unique per CALL, not just per process: two threads in the same process
+        # racing on the same cache key (identical prompt+image) would otherwise share one tmp
+        # path via os.getpid() alone, and the loser's replace() raises FileNotFoundError once the
+        # winner has already consumed (renamed away) the shared tmp file.
         final_path = self._cache_path(key)
-        tmp_path = final_path.with_suffix(f".{os.getpid()}.tmp")
+        tmp_path = final_path.with_suffix(f".{os.getpid()}.{threading.get_ident()}.tmp")
         with open(tmp_path, "w") as f:
             json.dump({"text": text}, f)
         tmp_path.replace(final_path)
