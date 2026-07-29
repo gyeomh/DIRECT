@@ -603,6 +603,41 @@ port 8002 — 8000/8001 were already in use by unrelated processes on this share
   first call TTFT 0.47s, second (same image, different suffix) TTFT 0.11s, about 4x faster,
   consistent with the image's KV cache being reused.
 
+**Full real-VLM sweep (`scripts/run_full_sweep.py`): all 167 episodes × all 6 description types,
+1002 episode-runs, port 8002.** ThreadPoolExecutor (12 workers), one fresh `LLMClient` + `QAEnv`
+per task, resumable (a task whose output JSON already exists is skipped). Rich per-run JSON logs
+(`context_parser` result, checklist before/after per candidate, every `self_check` interaction
+with region/assertion-or-question/answer/evidence/verdict, `zone_gen` bbox/scene/zone_list,
+resolved image paths) saved to `/data/gyeom/coin_challenge/direction_method_logs/full_sweep_v1/`,
+browsable via `scripts/serve_viewer.py` (a local zero-dependency stdlib HTTP server + single-page
+viewer at `viewer/index.html`).
+
+Final result after the fixes below: **1002/1002 runs completed, zero crashes, zero invalid
+actions** (944 `terminated`, 58 `discarded_env_bug` per ENV.md §6 bug 3). Full-success rate
+519/1002 (51.8%), fairly even across description types (45.5%–55.7%; `category`-only lowest, as
+expected — least disambiguating information).
+
+Two real bugs surfaced by running at this scale (both fixed, both with regression tests):
+
+- **`LLMClient._store_cache`'s tmp-file suffix was keyed on `os.getpid()` alone**, which every
+  thread in one process shares. Two threads racing on the same cache key (identical prompt+image
+  — realistic once many episode-runs share a thread pool) collided on one tmp path; the loser's
+  `tmp_path.replace()` raised `FileNotFoundError` once the winner had already renamed it away.
+  Fixed by keying the suffix on `threading.get_ident()` too.
+- **`maxItems` alone was not sufficient to stop the token-repetition-loop crash** (§10/§11's
+  earlier fix). 9/1002 runs (0.9%) crashed the same way but one level deeper: the model degenerated
+  by repeating the same clause *within a single string element* (`checklist_update`'s `additions`,
+  mainly `color_context`/`color_feature`/`color_context_feature`), not across array items — still
+  running until `max_tokens` truncated the response mid-string, since `maxItems` never bounds a
+  string's own length. Fixed with `maxLength: 200` on every free-text string field across all four
+  modules (context_parser, checklist_update, self_check, zone_gen), plus a `maxItems` cap on
+  zone_gen's `LOCATE_SCHEMA` "boxes" array, which had no bound at all. Retrying the 9 crashed runs
+  after the fix still reproduced 6/9 identically at first — `LLMClient`'s cache key deliberately
+  excludes `response_schema` (this doc's own formula in §9), so a prompt whose bad response was
+  already cached returns the same truncated text regardless of the new schema. Purged the 9
+  oversized/unparseable cache entries by content (text over 500 chars that still fails
+  `json.loads`) and reran; all 1002 runs then completed clean.
+
 ---
 
 ## 12. checklist_update
