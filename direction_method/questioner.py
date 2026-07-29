@@ -50,15 +50,28 @@ ASSUMED_MAX_CANDIDATES = 7
 
 @dataclass
 class CandidateLog:
-    """One per candidate, for tomorrow's diagnosis runs. Finalized once the candidate concludes."""
+    """One per candidate, for tomorrow's diagnosis runs. Finalized once the candidate concludes.
+
+    `interactions` is the rich, ordered trace a visual viewer reads: one entry per checklist
+    check (Step 2) or relation question+answer+check (Step 4/5), each carrying the actual region/
+    assertion/evidence/verdict text, not just the verdict. Aggregate fields (questions_asked,
+    self_check_calls, verdicts) are kept alongside for cheap counting without walking interactions.
+    """
 
     questions_asked: int = 0
     self_check_calls: int = 0
     verdicts: list = field(default_factory=list)  # in call order, across both Step 2 and Step 4/5
+    interactions: list = field(default_factory=list)  # [{"type": ..., ...}], in call order
     conclusion: object = None  # True (match) / False (mismatch), set once concluded
     reasoning: str = ""
     started_at: float = 0.0
     elapsed_s: float = 0.0
+    bbox_2d: object = None  # zone_gen's box for this candidate, in the model's native frame
+    zone_list: list = field(default_factory=list)  # resolved relations after dedup (§5-2)
+    scene: str = ""  # zone_gen's own "scene" description of where the target sits in frame
+    boxed_image: object = None  # np.ndarray -- the driver saves this to disk, questioner does not
+    checklist_before: dict = field(default_factory=dict)  # self.checklist snapshot at candidate start
+    checklist_after: dict = field(default_factory=dict)  # self.checklist snapshot after concluding
 
 
 @dataclass
@@ -72,6 +85,7 @@ class _CandidateState:
     question_queue: list = field(default_factory=list)  # [(relation, question_text), ...]
     round_answers: list = field(default_factory=list)  # [(relation, answer), ...] this candidate
     awaiting_relation: object = None  # relation whose answer we're waiting for, or None
+    awaiting_question: object = None  # the question text asked for awaiting_relation, for logging
     checklist_phase_done: bool = False
     log: CandidateLog = field(default_factory=CandidateLog)
 
@@ -84,9 +98,12 @@ class DirectionMethodQuestioner(QuestionerInterface):
 
         self.llm_client = llm_client or LLMClient(model_id)
         parsed = parse_context(self.llm_client, target_description)
+        self.context_parser_result = parsed  # full ParsedContext -- target_category/target_phrase/
+        # other_objects/validation_problems/retried, for episode-level logging
         self.target_category = parsed.target_category
         self.target_phrase = parsed.target_phrase
         self.checklist = parsed.checklist
+        self.initial_checklist = dict(parsed.checklist)  # snapshot before any candidate mutates it
 
         self.first_question_asked = False
         self.step_count = 0
@@ -152,6 +169,7 @@ class DirectionMethodQuestioner(QuestionerInterface):
 
     def _ask(self, candidate: _CandidateState, relation: str, question_text: str, reasoning: str) -> dict:
         candidate.awaiting_relation = relation
+        candidate.awaiting_question = question_text
         if relation == "Target":
             self.first_question_asked = True
         candidate.log.questions_asked += 1
@@ -176,6 +194,7 @@ class DirectionMethodQuestioner(QuestionerInterface):
         candidate.log.conclusion = match
         candidate.log.reasoning = reasoning
         candidate.log.elapsed_s = time.time() - candidate.log.started_at
+        candidate.log.checklist_after = dict(self.checklist)
         self.candidate_logs.append(candidate.log)
         if budget_forced:
             self.episode_log["budget_forced_conclusions"] += 1
@@ -198,6 +217,7 @@ class DirectionMethodQuestioner(QuestionerInterface):
             self.candidates_seen += 1
             self._candidate = _CandidateState()
             self._candidate.log.started_at = time.time()
+            self._candidate.log.checklist_before = dict(self.checklist)
             self.episode_log["n_candidates"] += 1
         candidate = self._candidate
 
@@ -209,12 +229,23 @@ class DirectionMethodQuestioner(QuestionerInterface):
         # Receive the answer to whatever question was asked last call, if any.
         if candidate.awaiting_relation is not None:
             relation = candidate.awaiting_relation
+            question_text = candidate.awaiting_question
             candidate.awaiting_relation = None
+            candidate.awaiting_question = None
             candidate.round_answers.append((relation, answer))
             region = region_for(relation, self.target_phrase)
             result = self_check(self.llm_client, image, region, answer)
             candidate.log.self_check_calls += 1
             candidate.log.verdicts.append(result.verdict)
+            candidate.log.interactions.append({
+                "type": "relation_answer_check",
+                "relation": relation,
+                "question": question_text,
+                "answer": answer,
+                "region": region,
+                "verdict": result.verdict,
+                "evidence": result.evidence,
+            })
             self.episode_log["total_self_check_calls"] += 1
             if is_failure(result.verdict):
                 # SPEC.md §13 / B1: this answer is still true about the target regardless of the
@@ -231,6 +262,14 @@ class DirectionMethodQuestioner(QuestionerInterface):
                     result = self_check(self.llm_client, image, region, assertion)
                     candidate.log.self_check_calls += 1
                     candidate.log.verdicts.append(result.verdict)
+                    candidate.log.interactions.append({
+                        "type": "checklist_check",
+                        "parent_key": parent_key,
+                        "assertion": assertion,
+                        "region": region,
+                        "verdict": result.verdict,
+                        "evidence": result.evidence,
+                    })
                     self.episode_log["total_self_check_calls"] += 1
                     if is_failure(result.verdict):
                         return self._conclude(candidate, False, f"checklist self_check failed on {parent_key!r}")
@@ -250,6 +289,10 @@ class DirectionMethodQuestioner(QuestionerInterface):
             candidate.bbox_2d = loc.bbox_2d
             candidate.boxed_image = loc.boxed_image
             candidate.zone_list = resolved.relations
+            candidate.log.bbox_2d = loc.bbox_2d
+            candidate.log.boxed_image = loc.boxed_image
+            candidate.log.zone_list = resolved.relations
+            candidate.log.scene = zr.scene
             candidate.question_queue = [(r, question_for(r, self.target_phrase)) for r in resolved.relations]
             if not self.first_question_asked:
                 candidate.question_queue.insert(
