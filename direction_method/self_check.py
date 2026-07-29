@@ -116,7 +116,7 @@ verdict  — "yes" or "no".
 SELF_CHECK_SCHEMA = {
     "type": "object",
     "properties": {
-        "evidence": {"type": "string", "description": "Under 15 words. What was actually seen in the region."},
+        "evidence": {"type": "string", "maxLength": 200, "description": "Under 15 words. What was actually seen in the region."},
         "verdict": {"type": "string", "enum": ["yes", "no"]},
     },
     "required": ["evidence", "verdict"],

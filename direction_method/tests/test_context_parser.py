@@ -92,12 +92,12 @@ def test_schema_pins_checklist_keys_to_the_11_key_enum():
 
 
 def test_schema_checklist_values_are_bounded_string_arrays():
-    # maxItems bounds worst-case generation length -- confirmed against a live server that an
-    # unbounded array lets the model loop-repeat the same assertion until max_tokens truncates
-    # the response mid-string (never parses).
+    # maxItems bounds the array; maxLength bounds each string -- confirmed against a live server
+    # that maxItems alone is NOT sufficient: the model can still loop-repeat the same clause
+    # WITHIN one string element until max_tokens truncates the response mid-string (never parses).
     checklist_schema = CONTEXT_PARSER_SCHEMA["properties"]["checklist"]
     for key_schema in checklist_schema["properties"].values():
-        assert key_schema == {"type": "array", "items": {"type": "string"}, "maxItems": 8}
+        assert key_schema == {"type": "array", "items": {"type": "string", "maxLength": 200}, "maxItems": 8}
 
 
 def test_schema_other_objects_field_order_is_object_then_cue_then_key():

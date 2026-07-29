@@ -76,10 +76,17 @@ Include only keys that have new assertions. If nothing should be added, return
 # additionalProperties:False plus an explicit property per key, no per-key "required" since only
 # keys with genuinely new assertions should appear.
 #
-# maxItems=8: same fix as context_parser.py's schema, for the same reason -- confirmed against a
-# live server that an unbounded per-key array lets the model loop-repeat the same assertion string
-# until max_tokens cuts the response off mid-string.
-_ADDITIONS_VALUE_SCHEMA = {"type": "array", "items": {"type": "string"}, "maxItems": 8}
+# maxItems=8 bounds the ARRAY -- confirmed against a live server that without it, an unbounded
+# per-key array lets the model loop-repeat the same assertion string until max_tokens cuts the
+# response off mid-string. That alone was NOT sufficient: reproduced on the full 167-episode real
+# sweep (episode 53/54/60, color_context/color_feature) with maxItems already in place -- the
+# model instead degenerated WITHIN a single string element (concatenating the same clause over and
+# over, e.g. "...in the center of the kitchen, rectangular, smooth, reflective surface, in the
+# center of the kitchen, ..." repeated dozens of times), still truncating mid-string since maxItems
+# never bounds a string's own length. maxLength=200 is generous for one real assertion (the
+# longest genuine examples in this prompt run under 80 chars) but far below where repetition
+# becomes the dominant content.
+_ADDITIONS_VALUE_SCHEMA = {"type": "array", "items": {"type": "string", "maxLength": 200}, "maxItems": 8}
 
 CHECKLIST_UPDATE_SCHEMA = {
     "type": "object",
