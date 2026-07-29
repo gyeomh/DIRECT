@@ -17,7 +17,7 @@ from PIL import Image, ImageDraw
 
 from llm import LLMClient, image_hash
 
-MAX_REGIONS = 5
+MAX_REGIONS = 4
 
 REGION_KEYS = [
     "left", "right", "above", "below",
