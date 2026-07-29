@@ -642,58 +642,61 @@ Two real bugs surfaced by running at this scale (both fixed, both with regressio
 
 ## 12. checklist_update
 
-Text-only call, no image. **One call per candidate-image judgement** — every `(relation, answer)`
-pair gathered for that candidate in one round goes into a single call, never one call per pair.
-Prompt text is kept verbatim in `checklist_update.py` (`CHECKLIST_UPDATE_PROMPT`), same policy as
-the other three modules.
+**No LLM call.** Originally a text-only VLM call (extract assertions from each new oracle answer,
+choose which of the 11 checklist keys to file them under, one call per candidate-image judgement).
+Removed after being confirmed broken at scale: on the real full 167-episode × 6-description-type
+sweep, the model misfiled content under the wrong key in **51.5%** of candidates where the
+checklist grew at all — e.g. the oracle's answer to "what is on the left of the target?" (a
+mirror) landed under `left-bottom` instead of `left`, despite the prompt's own rule 2 ("KEEP THE
+ASKED KEY... even if the answer mentions a different position") saying not to.
 
-**Input** (two labeled sections, not a single blob):
+This is the exact same lesson as `context_parser`'s `other_objects` fix (§10): once the correct
+key is already known in code, never ask the model to reclassify it. Every `(relation, answer)`
+pair in `round_answers` already carries its own correct key — `relation` is the exact region key
+the *question* was generated for (`templates.question_for`/`region_for`), fixed by `zone_gen`'s
+resolved relations before the question was ever asked. There is nothing left to classify.
+
+**Current behavior**, entirely in code:
 
 ```
-current checklist:
-{key}: {assertion}
-...
-
-new answers:
-{key}: {raw oracle answer}
-...
+for relation, answer in round_answers:
+    additions[relation].append(answer)   # verbatim -- no rephrasing, no atomic split
+merge_checklist(checklist, additions)
 ```
 
-The VLM sees the *entire* current checklist (one `{key}: {assertion}` line per existing entry,
-however many that is) plus every new answer gathered this round, and is asked to extract only what
-should be **added** — it never re-emits the existing checklist, and it is not the thing that
-merges. Assertion style, atomicity, framing-stripping, and duplicate-skipping rules mirror
-`context_parser`'s (§10) rules 1/3/4/8 wording, adapted for update rather than initial extraction;
-rule 2 ("keep the asked key") is specific to this module — file an assertion under the key the
-*question* asked about even if the answer's wording suggests a different position, since the
-oracle is answering the question that was actually asked, not re-describing the whole scene from
-scratch. Rule 7 (empty regions) fixes the canonical wording: an oracle answer describing an empty
-region becomes exactly the single assertion `"nothing visible"` under that key — this is also why
-`self_check` needed the fifth contradiction case above.
-
-**Output:** `{"additions": {key: [str]}}`, keys pinned to the same 11-key enum as `context_parser`
-(§10) via `additionalProperties: false` plus an explicit property per key. Same empty-list
-normalization as `context_parser`: an entry with an empty assertion list is dropped.
-
-**Merge happens in code, never in the VLM:**
+No atomic splitting, no framing-strip, no "nothing visible" normalization, no LLM-driven
+duplicate detection — the checklist entry is the oracle's own sentence, unmodified. Merge
+mechanics are unchanged from the original design:
 
 1. Append `additions[key]` to the existing list under `key`.
 2. Never modify, reword, reorder, or delete an existing assertion — the merge only ever appends.
 3. Safety-net dedup on exact match, after normalizing case, surrounding whitespace, and internal
-   whitespace runs. The prompt's own rule 8 is the primary defence against duplicates; this only
-   catches the literal repeats that rule misses (checked against both the pre-existing assertions
-   for that key and any new assertions already added earlier in the same merge).
-4. Assert the post-merge checklist is a superset of the pre-merge one — concretely, every
-   pre-existing per-key assertion list must survive as an exact, unreordered prefix of the
-   post-merge list for that key. This should be unreachable given rules 1-2 above; it exists as a
-   runtime guard against a future bug in the merge code, not a real failure mode today.
+   whitespace runs (checked against both the pre-existing assertions for that key and any new
+   assertions already added earlier in the same merge).
+4. Assert the post-merge checklist is a superset of the pre-merge one — every pre-existing per-key
+   assertion list must survive as an exact, unreordered prefix of the post-merge list for that
+   key. Unreachable given the append-only construction above; kept as a runtime guard.
+
+**Verified end to end** against the real vllm server (6 fresh episode-runs, port 8002, post-fix):
+every checklist key that grew matched the relation actually asked about, zero misfiles.
+
+**Known accepted trade-off:** since there's no LLM step anymore, non-visual filler an oracle answer
+might include (opinions, atmosphere, style judgments) is no longer stripped before landing in the
+checklist. Accepted deliberately — the 51.5% key-misfiling this replaces was a far larger, harder-
+to-detect problem (silently breaks relation dedup and inflates question counts) than an
+occasionally verbose assertion, which `self_check` still has to judge correctly either way.
+
+**`full_sweep_v1`'s existing logs predate this fix** and should be treated as stale for any
+question involving non-`Target` checklist content or relation-question counts — the sweep has not
+yet been rerun with the corrected `checklist_update`.
 
 ---
 
 ## 13. Episode loop (`questioner.py`, `DirectionMethodQuestioner`)
 
 Wires the four modules together into `QuestionerInterface.ask_or_conclude`. No new prompts — every
-VLM call goes through `context_parser`, `self_check`, `zone_gen`, or `checklist_update`.
+VLM call goes through `context_parser`, `self_check`, or `zone_gen` (`checklist_update` makes none
+— see §12).
 
 **State.** Built once in `__init__` from `info["target_description"]` via `context_parser`:
 `target_category`, `target_phrase`, `checklist`, plus whether the mandatory first question has
