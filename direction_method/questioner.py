@@ -1,6 +1,7 @@
 """Episode loop (SPEC.md §13, build order step 4): the QuestionerInterface implementation that
 wires context_parser, self_check, zone_gen, and checklist_update together. No new prompts here --
-every VLM call goes through one of the four already-built modules.
+every VLM call goes through context_parser, self_check, or zone_gen (checklist_update makes none;
+see its own module docstring).
 
 ENV.md §4's two call-pattern facts drive this design:
   1. The questioner is constructed once per episode and never reset between candidates -- instance
@@ -182,14 +183,11 @@ class DirectionMethodQuestioner(QuestionerInterface):
     def _conclude(
         self, candidate: _CandidateState, match: bool, reasoning: str, *, run_update: bool = True, budget_forced: bool = False
     ) -> dict:
-        # Ordering decision (documented in SPEC.md §13): checklist_update runs SYNCHRONOUSLY here,
-        # before returning the conclusion, rather than lazily at the start of the next candidate.
-        # In this harness the two are equally slow in total wall-clock terms either way (the call
-        # is blocking regardless of which single step absorbs its latency), so synchronous is
-        # strictly simpler with no real latency cost, and it avoids carrying "pending update"
-        # state across the candidate boundary.
+        # checklist_update is a pure code function now (no LLM call -- see checklist_update.py's
+        # module docstring), so the earlier "run synchronously vs. lazily" latency tradeoff no
+        # longer applies; it just always runs here, before returning the conclusion.
         if run_update and candidate.round_answers:
-            self.checklist = run_checklist_update(self.llm_client, self.checklist, candidate.round_answers)
+            self.checklist = run_checklist_update(self.checklist, candidate.round_answers)
 
         candidate.log.conclusion = match
         candidate.log.reasoning = reasoning

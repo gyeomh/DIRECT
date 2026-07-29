@@ -40,7 +40,10 @@ def _clear_zone_gen_module_caches():
 class ScriptedBackend:
     """Dispatches on each module's distinctive, never-substituted prompt text, so a single fake
     backend can drive the full pipeline (context_parser once in __init__, then self_check/
-    zone_gen/checklist_update repeatedly) without caring about call order.
+    zone_gen repeatedly) without caring about call order. checklist_update makes no LLM call at
+    all (see checklist_update.py's module docstring) -- its output is fully determined by the
+    actual (relation, answer) pairs a test feeds through call()'s `answer` argument, filed
+    verbatim under their own already-known relation key.
     """
 
     def __init__(
@@ -53,7 +56,6 @@ class ScriptedBackend:
         self_check_verdicts=None,
         locate_boxes=None,
         zones_regions=None,
-        checklist_additions=None,
     ):
         self.target_category = target_category
         self.target_phrase = target_phrase
@@ -68,7 +70,6 @@ class ScriptedBackend:
             locate_boxes if locate_boxes is not None else [{"bbox_2d": [200, 200, 800, 800], "label": "t", "note": "n"}]
         )
         self.zones_regions = zones_regions if zones_regions is not None else [{"note": "n", "key": "left"}]
-        self.checklist_additions = checklist_additions if checklist_additions is not None else {}
         self.calls = []  # module name per call, in order
 
     def generate(self, prompt, image, response_schema, timeout_s):
@@ -90,9 +91,6 @@ class ScriptedBackend:
         if "A red box marks the TARGET object." in prompt:
             self.calls.append("zones")
             return json.dumps({"scene": "s", "regions": self.zones_regions})
-        if "You maintain a checklist of facts about a scene." in prompt:
-            self.calls.append("checklist_update")
-            return json.dumps({"additions": self.checklist_additions})
         raise AssertionError(f"unscripted prompt: {prompt[:100]!r}")
 
 
@@ -166,7 +164,6 @@ def test_context_parser_runs_once_in_init(tmp_path):
 def test_happy_path_first_question_then_one_relation_then_match(tmp_path):
     q, scripted = make_questioner(
         tmp_path, checklist={}, zones_regions=[{"note": "n", "key": "left"}],
-        checklist_additions={"Target": ["it is navy blue"]},
     )
 
     a1 = call(q, IMG_A, answer=None)  # new candidate: empty checklist -> straight to zone_gen
@@ -180,10 +177,14 @@ def test_happy_path_first_question_then_one_relation_then_match(tmp_path):
     assert a3["conclusion"] == 1  # match: queue drained, nothing failed
 
     assert q.first_question_asked is True
-    assert q.checklist == {"Target": ["it is navy blue"]}  # merged via checklist_update
+    # checklist_update files each answer verbatim under its own already-known key -- no LLM call.
+    assert q.checklist == {
+        "Target": ["a navy blue cabinet in the corner"],
+        "left": ["a wooden table on the left"],
+    }
     assert scripted.calls.count("locate") == 1
     assert scripted.calls.count("zones") == 1
-    assert scripted.calls.count("checklist_update") == 1
+    assert "checklist_update" not in scripted.calls  # no LLM call for it anymore
 
 
 def test_first_question_not_repeated_for_a_later_candidate(tmp_path):
@@ -237,7 +238,6 @@ def test_relation_answer_failure_concludes_mismatch_and_updates_checklist_with_f
         checklist={},
         zones_regions=[{"note": "n", "key": "left"}],
         self_check_verdicts=["yes", "no"],  # Target passes, "left" fails
-        checklist_additions={"Target": ["it is navy blue"], "left": ["a refrigerator"]},
     )
     call(q, IMG_A, answer=None)  # asks Target
     call(q, IMG_A, answer="a navy blue cabinet")  # Target passes, asks "left"
@@ -245,9 +245,9 @@ def test_relation_answer_failure_concludes_mismatch_and_updates_checklist_with_f
     assert a3["conclusion"] == 0
 
     # B1: checklist_update still ran, including the failing round -- both answers this round
-    # (the passing Target one AND the failing left one) were fed into it.
-    assert scripted.calls[-1] == "checklist_update"
-    assert q.checklist == {"Target": ["it is navy blue"], "left": ["a refrigerator"]}
+    # (the passing Target one AND the failing left one) were fed into it, each verbatim under
+    # its own key.
+    assert q.checklist == {"Target": ["a navy blue cabinet"], "left": ["a refrigerator, not a table"]}
 
 
 def test_all_relations_pass_concludes_match(tmp_path):
@@ -296,11 +296,11 @@ def test_zone_gen_runs_exactly_once_per_candidate(tmp_path):
 
 
 def test_checklist_growth_is_reverified_on_the_next_candidate(tmp_path):
-    q, scripted = make_questioner(
-        tmp_path, checklist={}, zones_regions=[], checklist_additions={"Target": ["it is navy blue"]},
-    )
+    q, scripted = make_questioner(tmp_path, checklist={}, zones_regions=[])
     # zones_regions=[] still lets the bbox-margin fallback queue a few directional relations
     # (zone_gen.py's own designed behavior) -- drain the candidate however many calls that takes.
+    # Every question gets the same answer text, so whatever keys grew, they must all hold exactly
+    # that text -- checklist_update files it verbatim under each question's own known key.
     answer = None
     for _ in range(10):
         a = call(q, IMG_A, answer=answer)
@@ -309,7 +309,8 @@ def test_checklist_growth_is_reverified_on_the_next_candidate(tmp_path):
         answer = "a navy blue cabinet"
     else:
         raise AssertionError("candidate never concluded")
-    assert q.checklist == {"Target": ["it is navy blue"]}
+    assert "Target" in q.checklist
+    assert all(assertions == ["a navy blue cabinet"] for assertions in q.checklist.values())
     scripted.calls.clear()
     scripted.self_check_verdicts = ["yes"] * 10
 
@@ -396,7 +397,6 @@ def test_soft_stop_mid_queue_concludes_mismatch_but_still_updates_checklist(tmp_
         checklist={},
         zones_regions=[{"note": "n", "key": "left"}, {"note": "n2", "key": "on"}],
         self_check_verdicts=["yes", "yes"],
-        checklist_additions={"Target": ["it is navy blue"]},
     )
     call(q, IMG_A, answer=None)  # Target
     call(q, IMG_A, answer="a navy blue cabinet")  # Target passes, asks "left"
@@ -404,7 +404,8 @@ def test_soft_stop_mid_queue_concludes_mismatch_but_still_updates_checklist(tmp_
 
     a = call(q, IMG_A, answer="a wooden table")  # "left" passes, but budget stops "on" from being asked
     assert a["conclusion"] == 0
-    assert q.checklist == {"Target": ["it is navy blue"]}  # checklist_update still ran
+    # checklist_update still ran, with only the two answers actually gathered this round
+    assert q.checklist == {"Target": ["a navy blue cabinet"], "left": ["a wooden table"]}
 
 
 # --- multiple candidates end to end ----------------------------------------------------------
@@ -412,7 +413,7 @@ def test_soft_stop_mid_queue_concludes_mismatch_but_still_updates_checklist(tmp_
 
 def test_three_candidates_in_one_episode(tmp_path):
     q, scripted = make_questioner(
-        tmp_path, checklist={}, zones_regions=[], checklist_additions={"Target": ["it is navy blue"]},
+        tmp_path, checklist={}, zones_regions=[],
     )
     for image, answer_seq in [
         (IMG_A, ["a navy blue cabinet"]),
@@ -461,7 +462,7 @@ def test_context_parser_result_and_initial_checklist_are_exposed(tmp_path):
 
 def test_initial_checklist_snapshot_is_not_mutated_by_later_growth(tmp_path):
     q, scripted = make_questioner(
-        tmp_path, checklist={}, zones_regions=[], checklist_additions={"Target": ["it is navy blue"]},
+        tmp_path, checklist={}, zones_regions=[],
     )
     answer = None
     for _ in range(10):
@@ -521,7 +522,7 @@ def test_zone_gen_detail_logged_on_candidate(tmp_path):
 
 def test_checklist_before_and_after_snapshots_on_candidate_log(tmp_path):
     q, scripted = make_questioner(
-        tmp_path, checklist={}, zones_regions=[], checklist_additions={"Target": ["it is navy blue"]},
+        tmp_path, checklist={}, zones_regions=[],
     )
     answer = None
     for _ in range(10):
