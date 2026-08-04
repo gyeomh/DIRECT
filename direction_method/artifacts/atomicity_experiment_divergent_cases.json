@@ -1,0 +1,524 @@
+[
+  {
+    "episode_id": "40341c92",
+    "description_type": "color",
+    "description": "Red and blue cloth",
+    "atomic_target": [
+      "it is red",
+      "it is blue"
+    ],
+    "non_atomic_target": [
+      "it is red and blue"
+    ]
+  },
+  {
+    "episode_id": "a950bab7",
+    "description_type": "color",
+    "description": "Black and silver monitor",
+    "atomic_target": [
+      "it is black",
+      "it is silver"
+    ],
+    "non_atomic_target": [
+      "it is black and silver"
+    ]
+  },
+  {
+    "episode_id": "9502dbf3",
+    "description_type": "color",
+    "description": "Silver and black microwave",
+    "atomic_target": [
+      "it is silver",
+      "it is black"
+    ],
+    "non_atomic_target": [
+      "it is silver and black"
+    ]
+  },
+  {
+    "episode_id": "f9140bf5",
+    "description_type": "color",
+    "description": "Blue and white bath towel",
+    "atomic_target": [
+      "it is blue",
+      "it is white"
+    ],
+    "non_atomic_target": [
+      "it is blue and white"
+    ]
+  },
+  {
+    "episode_id": "f905b014",
+    "description_type": "color",
+    "description": "Beige, blue, and rust carpet",
+    "atomic_target": [
+      "it is beige",
+      "it is blue",
+      "it is rust"
+    ],
+    "non_atomic_target": [
+      "it is beige, blue, and rust"
+    ]
+  },
+  {
+    "episode_id": "1f2e6730",
+    "description_type": "color_feature",
+    "description": "Dark gray heater with vertical slats",
+    "atomic_target": [
+      "it is dark gray",
+      "it has vertical slats"
+    ],
+    "non_atomic_target": [
+      "it is dark gray and has vertical slats"
+    ]
+  },
+  {
+    "episode_id": "40341c92",
+    "description_type": "color_feature",
+    "description": "Red and blue cloth with gold embroidery",
+    "atomic_target": [
+      "it is red",
+      "it is blue",
+      "it has gold embroidery"
+    ],
+    "non_atomic_target": [
+      "it is red and blue and has gold embroidery"
+    ]
+  },
+  {
+    "episode_id": "f6c9a881",
+    "description_type": "color_feature",
+    "description": "Large beige carpet",
+    "atomic_target": [
+      "it is large",
+      "it is beige"
+    ],
+    "non_atomic_target": [
+      "it is large and beige"
+    ]
+  },
+  {
+    "episode_id": "033951b1",
+    "description_type": "color_feature",
+    "description": "Beige concrete stair",
+    "atomic_target": [
+      "it is beige",
+      "it is concrete"
+    ],
+    "non_atomic_target": [
+      "it is beige and concrete"
+    ]
+  },
+  {
+    "episode_id": "a950bab7",
+    "description_type": "color_feature",
+    "description": "Black and silver monitor with a dark screen",
+    "atomic_target": [
+      "it is black",
+      "it is silver"
+    ],
+    "non_atomic_target": [
+      "it is black and silver"
+    ]
+  },
+  {
+    "episode_id": "b7bc5a95",
+    "description_type": "color_feature",
+    "description": "Tall reddish-brown ceramic vase",
+    "atomic_target": [
+      "it is tall",
+      "it is reddish-brown",
+      "it is ceramic"
+    ],
+    "non_atomic_target": [
+      "it is tall, reddish-brown, and ceramic"
+    ]
+  },
+  {
+    "episode_id": "162a896c",
+    "description_type": "color_feature",
+    "description": "White cabinet with paneled doors",
+    "atomic_target": [
+      "it is white",
+      "it has paneled doors"
+    ],
+    "non_atomic_target": [
+      "it is white and has paneled doors"
+    ]
+  },
+  {
+    "episode_id": "9502dbf3",
+    "description_type": "color_feature",
+    "description": "Stainless steel microwave with a digital display",
+    "atomic_target": [
+      "it is stainless steel",
+      "it has a digital display"
+    ],
+    "non_atomic_target": [
+      "it is stainless steel and has a digital display"
+    ]
+  },
+  {
+    "episode_id": "6055c33d",
+    "description_type": "color_feature",
+    "description": "Dark brown wooden lamp stand",
+    "atomic_target": [
+      "it is dark brown",
+      "it is wooden"
+    ],
+    "non_atomic_target": [
+      "it is dark brown and wooden"
+    ]
+  },
+  {
+    "episode_id": "c8ec41d0",
+    "description_type": "color_feature",
+    "description": "Dark reddish-brown drawer with a polished wood surface",
+    "atomic_target": [
+      "it is dark reddish-brown",
+      "it has a polished wood surface"
+    ],
+    "non_atomic_target": [
+      "it is dark reddish-brown and has a polished wood surface"
+    ]
+  },
+  {
+    "episode_id": "c0622d58",
+    "description_type": "color_feature",
+    "description": "Dark gray stone sink",
+    "atomic_target": [
+      "it is dark gray",
+      "it is stone"
+    ],
+    "non_atomic_target": [
+      "it is dark gray and made of stone"
+    ]
+  },
+  {
+    "episode_id": "865f7e80",
+    "description_type": "color_feature",
+    "description": "Red microwave with a silver handle",
+    "atomic_target": [
+      "it is red",
+      "it has a silver handle"
+    ],
+    "non_atomic_target": [
+      "it is red and has a silver handle"
+    ]
+  },
+  {
+    "episode_id": "f905b014",
+    "description_type": "color_feature",
+    "description": "Beige carpet with blue and rust geometric patterns",
+    "atomic_target": [
+      "it is beige",
+      "it has blue and rust geometric patterns"
+    ],
+    "non_atomic_target": [
+      "it is beige and has blue and rust geometric patterns"
+    ]
+  },
+  {
+    "episode_id": "31962546",
+    "description_type": "color_feature",
+    "description": "Bronze statue of a knight on horseback",
+    "atomic_target": [
+      "it is bronze",
+      "it is a statue of a knight on horseback"
+    ],
+    "non_atomic_target": [
+      "it is bronze and depicts a knight on horseback"
+    ]
+  },
+  {
+    "episode_id": "bce21d8b",
+    "description_type": "color_feature",
+    "description": "Gold square clock",
+    "atomic_target": [
+      "it is gold",
+      "it is square"
+    ],
+    "non_atomic_target": [
+      "it is gold and square"
+    ]
+  },
+  {
+    "episode_id": "76e0e9fb",
+    "description_type": "color_feature",
+    "description": "Light gray cabinet with black cup pull handles",
+    "atomic_target": [
+      "it is light gray",
+      "it has black cup pull handles"
+    ],
+    "non_atomic_target": [
+      "it is light gray and has black cup pull handles"
+    ]
+  },
+  {
+    "episode_id": "40341c92",
+    "description_type": "color_context",
+    "description": "Red and blue cloth displayed between two golden columns",
+    "atomic_target": [
+      "it is red",
+      "it is blue"
+    ],
+    "non_atomic_target": [
+      "it is red and blue"
+    ]
+  },
+  {
+    "episode_id": "a950bab7",
+    "description_type": "color_context",
+    "description": "Black and silver monitor resting on a wooden desk",
+    "atomic_target": [
+      "it is black",
+      "it is silver"
+    ],
+    "non_atomic_target": [
+      "it is black and silver"
+    ]
+  },
+  {
+    "episode_id": "fcb89d4c",
+    "description_type": "color_context",
+    "description": "Blue bath towel draped over a shower door frame",
+    "atomic_target": [
+      "it is blue",
+      "it is draped"
+    ],
+    "non_atomic_target": [
+      "it is blue"
+    ]
+  },
+  {
+    "episode_id": "f905b014",
+    "description_type": "color_context",
+    "description": "Beige, blue, and rust carpet under a coffee table",
+    "atomic_target": [
+      "it is beige",
+      "it is blue",
+      "it is rust"
+    ],
+    "non_atomic_target": [
+      "it is beige, blue, and rust"
+    ]
+  },
+  {
+    "episode_id": "1f2e6730",
+    "description_type": "color_context_feature",
+    "description": "Dark gray slatted heater beneath a round mirror",
+    "atomic_target": [
+      "it is dark gray",
+      "it is slatted"
+    ],
+    "non_atomic_target": [
+      "it is dark gray and slatted"
+    ]
+  },
+  {
+    "episode_id": "40341c92",
+    "description_type": "color_context_feature",
+    "description": "Red and blue embroidered cloth displayed between two golden columns",
+    "atomic_target": [
+      "it is red",
+      "it is blue",
+      "it is embroidered"
+    ],
+    "non_atomic_target": [
+      "it is red and blue and embroidered"
+    ]
+  },
+  {
+    "episode_id": "f6c9a881",
+    "description_type": "color_context_feature",
+    "description": "Large beige carpet under a wooden coffee table",
+    "atomic_target": [
+      "it is large",
+      "it is beige"
+    ],
+    "non_atomic_target": [
+      "it is large and beige"
+    ]
+  },
+  {
+    "episode_id": "8e530f8c",
+    "description_type": "color_context_feature",
+    "description": "Light blue tiled shower cabin next to a wooden vanity",
+    "atomic_target": [
+      "it is light blue",
+      "it is tiled"
+    ],
+    "non_atomic_target": [
+      "it is light blue and tiled"
+    ]
+  },
+  {
+    "episode_id": "033951b1",
+    "description_type": "color_context_feature",
+    "description": "Beige concrete stair leading to a red door",
+    "atomic_target": [
+      "it is beige",
+      "it is concrete"
+    ],
+    "non_atomic_target": [
+      "it is beige and concrete"
+    ]
+  },
+  {
+    "episode_id": "a950bab7",
+    "description_type": "color_context_feature",
+    "description": "Black and silver monitor with a dark screen resting on a wooden desk",
+    "atomic_target": [
+      "it is black",
+      "it is silver",
+      "it has a dark screen"
+    ],
+    "non_atomic_target": [
+      "it is black and silver"
+    ]
+  },
+  {
+    "episode_id": "b7bc5a95",
+    "description_type": "color_context_feature",
+    "description": "Tall reddish-brown vase in front of a distressed mirror",
+    "atomic_target": [
+      "it is tall",
+      "it is reddish-brown"
+    ],
+    "non_atomic_target": [
+      "it is tall and reddish-brown"
+    ]
+  },
+  {
+    "episode_id": "162a896c",
+    "description_type": "color_context_feature",
+    "description": "White paneled cabinet beneath a tiled countertop",
+    "atomic_target": [
+      "it is white",
+      "it is paneled"
+    ],
+    "non_atomic_target": [
+      "it is white and paneled"
+    ]
+  },
+  {
+    "episode_id": "1965674b",
+    "description_type": "color_context_feature",
+    "description": "White front-loading washing machine under cabinets",
+    "atomic_target": [
+      "it is white",
+      "it is front-loading"
+    ],
+    "non_atomic_target": [
+      "it is white and front-loading"
+    ]
+  },
+  {
+    "episode_id": "9502dbf3",
+    "description_type": "color_context_feature",
+    "description": "Stainless steel microwave with a handle located above a stove",
+    "atomic_target": [
+      "it is stainless steel",
+      "it has a handle"
+    ],
+    "non_atomic_target": [
+      "it is stainless steel and has a handle"
+    ]
+  },
+  {
+    "episode_id": "6055c33d",
+    "description_type": "color_context_feature",
+    "description": "Dark brown wooden lamp stand situated between two green chairs",
+    "atomic_target": [
+      "it is dark brown",
+      "it is wooden"
+    ],
+    "non_atomic_target": [
+      "it is dark brown and wooden"
+    ]
+  },
+  {
+    "episode_id": "c8ec41d0",
+    "description_type": "color_context_feature",
+    "description": "Polished dark reddish-brown drawer inside a dresser near a white door",
+    "atomic_target": [
+      "it is polished",
+      "it is dark reddish-brown"
+    ],
+    "non_atomic_target": [
+      "it is polished, dark reddish-brown"
+    ]
+  },
+  {
+    "episode_id": "c0622d58",
+    "description_type": "color_context_feature",
+    "description": "Dark gray stone sink located beneath a large mirror",
+    "atomic_target": [
+      "it is dark gray",
+      "it is stone"
+    ],
+    "non_atomic_target": [
+      "it is dark gray and made of stone"
+    ]
+  },
+  {
+    "episode_id": "865f7e80",
+    "description_type": "color_context_feature",
+    "description": "Red microwave with a silver handle sitting on a wooden countertop",
+    "atomic_target": [
+      "it is red",
+      "it has a silver handle"
+    ],
+    "non_atomic_target": [
+      "it is red and has a silver handle"
+    ]
+  },
+  {
+    "episode_id": "f905b014",
+    "description_type": "color_context_feature",
+    "description": "Beige patterned carpet underneath a round wooden coffee table",
+    "atomic_target": [
+      "it is beige",
+      "it is patterned"
+    ],
+    "non_atomic_target": [
+      "it is beige and patterned"
+    ]
+  },
+  {
+    "episode_id": "31962546",
+    "description_type": "color_context_feature",
+    "description": "Bronze statue of a knight sitting on a white corner shelf",
+    "atomic_target": [
+      "it is bronze",
+      "it is of a knight"
+    ],
+    "non_atomic_target": [
+      "it is bronze and of a knight"
+    ]
+  },
+  {
+    "episode_id": "ef8b17c7",
+    "description_type": "color_context_feature",
+    "description": "Dark brown wooden piano with a green lamp on top",
+    "atomic_target": [
+      "it is dark brown",
+      "it is wooden"
+    ],
+    "non_atomic_target": [
+      "it is dark brown and wooden"
+    ]
+  },
+  {
+    "episode_id": "bce21d8b",
+    "description_type": "color_context_feature",
+    "description": "Gold square clock mounted above a wooden desk",
+    "atomic_target": [
+      "it is gold",
+      "it is square"
+    ],
+    "non_atomic_target": [
+      "it is gold and square"
+    ]
+  }
+]
