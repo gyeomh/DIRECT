@@ -57,18 +57,28 @@ from oracle_stub import LocalOracleStandIn
 from patches.apply_patches import fix_answer_prompt_typo
 from questioner import DirectionMethodQuestioner
 
-MODEL_ID = os.environ.get("SWEEP_MODEL_ID", "Qwen/Qwen3-VL-30B-A3B-Instruct")
+from questioner import DEFAULT_DISABLE_THINKING, DEFAULT_MODEL_ID
+
+# Defaults follow questioner.py's, so the sweep and the official eval path cannot silently measure
+# different models. Both stay env-overridable for one-off comparisons.
+MODEL_ID = os.environ.get("SWEEP_MODEL_ID", DEFAULT_MODEL_ID)
 # Thinking-capable models (e.g. Qwen3.6) need enable_thinking forced off per call, see llm.py's
 # LLMClient(disable_thinking=...) -- irrelevant/no-op for Instruct-only models like Qwen3-VL.
-DISABLE_THINKING = os.environ.get("SWEEP_DISABLE_THINKING", "0") == "1"
+DISABLE_THINKING = os.environ.get("SWEEP_DISABLE_THINKING", "1" if DEFAULT_DISABLE_THINKING else "0") == "1"
 ALL_TASK_TYPES = ["category", "color", "context", "color_feature", "color_context", "color_context_feature"]
 MAX_LOOP_ITERS = 100  # generous margin over env.max_steps (60)
 CALL_TIMEOUT_S = float(os.environ.get("SWEEP_CALL_TIMEOUT_S", "60.0"))  # generous: concurrent workers share one GPU, individual calls slow under load
 
 N_EPISODES = int(os.environ.get("SWEEP_EPISODES", "167"))
 TASK_TYPES = os.environ.get("SWEEP_TASK_TYPES", ",".join(ALL_TASK_TYPES)).split(",")
-N_WORKERS = int(os.environ.get("SWEEP_WORKERS", "12"))
-LOG_ROOT = Path(os.environ.get("SWEEP_LOG_ROOT", "/data/gyeom/coin_challenge/direction_method_logs/full_sweep_v1"))
+# 3, not 12. Above 3 the default model wedges the server partway through a sweep: requests time out
+# at the client ceiling and the GPU stays pinned until the SERVER process is kill -9'd, so it is a
+# server-side stuck generation, not client queueing. Reproduced at 12 and at 6; 3 completes cleanly.
+# Root cause not isolated -- do not raise this without re-investigating (SPEC.md §13).
+N_WORKERS = int(os.environ.get("SWEEP_WORKERS", "3"))
+# Repo-relative by default so a fresh clone works with no configuration; point SWEEP_LOG_ROOT at a
+# data disk for real sweeps, since each run writes rich per-episode JSON plus boxed images.
+LOG_ROOT = Path(os.environ.get("SWEEP_LOG_ROOT", str(DIRECTION_ROOT / "artifacts" / "sweeps" / "latest")))
 EPISODES_DIR = LOG_ROOT / "episodes"
 IMAGES_DIR = LOG_ROOT / "images"
 CACHE_DIR = DIRECTION_ROOT / "artifacts" / "cache"
