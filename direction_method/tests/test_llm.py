@@ -86,7 +86,7 @@ def test_image_hash_rejects_unsupported_type():
 def test_corrupt_cache_file_is_treated_as_miss_not_crash(tmp_path):
     client = LLMClient("fake-model", backend="fake", cache_dir=tmp_path)
     client.call("prompt", IMG)
-    cache_files = list(Path(tmp_path).glob("*.json"))
+    cache_files = list(client.cache_dir.glob("*.json"))
     assert len(cache_files) == 1
     cache_files[0].write_text("not valid json{{{")
 
@@ -97,8 +97,27 @@ def test_corrupt_cache_file_is_treated_as_miss_not_crash(tmp_path):
 def test_cache_write_is_atomic_no_leftover_tmp_files(tmp_path):
     client = LLMClient("fake-model", backend="fake", cache_dir=tmp_path)
     client.call("prompt", IMG)
-    tmp_files = list(Path(tmp_path).glob("*.tmp"))
+    # client.cache_dir, not tmp_path: the fake backend namespaces its entries into a subdirectory
+    # (see below), so globbing tmp_path itself would pass vacuously.
+    tmp_files = list(client.cache_dir.glob("*.tmp"))
     assert tmp_files == []
+
+
+def test_fake_backend_cache_is_namespaced_away_from_the_real_one(tmp_path):
+    """Regression test for the contamination that produced full_sweep_v1/v2 (SPEC.md §13).
+
+    The cache key is sha256(model | prompt | image_hash) -- no backend component -- so a FakeVLM
+    entry sharing a directory with real ones is indistinguishable from a real result, and a later
+    "real" run replays the placeholder instead of calling the model. Separate directories make
+    that collision impossible: identical model+prompt+image, different backend, different file.
+    """
+    fake = LLMClient("m", backend="fake", cache_dir=tmp_path)
+    fake.call("prompt", IMG)
+
+    assert fake.cache_dir == Path(tmp_path) / "_fake"
+    assert len(list(fake.cache_dir.glob("*.json"))) == 1
+    # Nothing written where a real-backend client would look.
+    assert list(Path(tmp_path).glob("*.json")) == []
 
 
 def test_latency_accumulates_across_calls(tmp_path):
