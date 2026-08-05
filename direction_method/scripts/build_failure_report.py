@@ -87,6 +87,26 @@ def relation_of(reasoning: str) -> str:
     return m.group(1) if m else ""
 
 
+def split_discards(records: list) -> tuple[list, list]:
+    """Separate harness discards from real method failures.
+
+    ENV.md §6 bug 3: on the training set the env sometimes fails to hand back a new image after a
+    correct conclusion, and the eval loop breaks. Those runs land in the log as failures, but the
+    questioner did nothing wrong -- in every one of them the episode never reached the final
+    candidate, which is the true match, so the target was never judged at all. A reviewer opening
+    one finds an oracle image that was never compared against anything and no verdict to explain.
+
+    They are kept (the discard rate is worth seeing) but held out of numbering and assignment, so
+    review effort goes only to runs where the method actually decided something.
+    """
+    real = [r for r in records if r.get("outcome") != "discarded_env_bug"]
+    discarded = [r for r in records if r.get("outcome") == "discarded_env_bug"]
+    for i, r in enumerate(discarded, start=1):
+        r["num"] = f"D{i}"
+        r["discarded"] = True
+    return real, discarded
+
+
 def number_and_assign(records: list, names: list) -> None:
     """Number the cases 1..N in list order, then hand out contiguous blocks.
 
@@ -253,6 +273,8 @@ figure.target img {{ border-color:var(--accent); }}
 .step .a {{ color:var(--ink); }}
 .step .e {{ color:var(--muted); }}
 .lbl {{ font-size:10.5px; letter-spacing:0.07em; text-transform:uppercase; color:var(--muted); }}
+.tgl {{ display:inline-flex; align-items:center; gap:6px; font-size:12.5px; color:var(--muted);
+        border:1px solid var(--line); border-radius:6px; padding:6px 9px; cursor:pointer; }}
 .empty {{ color:var(--muted); padding:40px 0; text-align:center; }}
 code {{ font-family:var(--mono); }}
 
@@ -270,7 +292,8 @@ code {{ font-family:var(--mono); }}
 </style>
 
 <header>
-  <div class="stat"><span class="eyebrow">{title_esc}</span><b>{n_fail}</b><span class="eyebrow">failed runs</span></div>
+  <div class="stat"><span class="eyebrow">{title_esc}</span><b>{n_review}</b><span class="eyebrow">to review</span></div>
+  <div class="stat"><span class="eyebrow">harness discards</span><b>{n_disc}</b><span class="eyebrow">not method failures</span></div>
   <div class="stat"><span class="eyebrow">of</span><b>{n_runs}</b><span class="eyebrow">total runs</span></div>
   <div class="stat"><span class="eyebrow">pass rate</span><b>{pass_rate}</b><span class="eyebrow">full success</span></div>
   {who_stats}
@@ -286,6 +309,7 @@ code {{ font-family:var(--mono); }}
   <select id="f-type"><option value="">description type: all</option>{type_opts}</select>
   <select id="f-kind"><option value="">failure mode: all</option>{kind_opts}</select>
   <input id="f-q" type="search" placeholder="search description, category, target phrase" />
+  <label class="tgl"><input type="checkbox" id="f-disc" /> show harness discards</label>
   <span id="count" class="chip"></span>
 </div>
 
@@ -304,6 +328,10 @@ let shown = [], current = -1;
 
 function matches(r) {{
   const whoEl = document.getElementById('f-who');
+  const showDisc = document.getElementById('f-disc').checked;
+  // Harness discards are hidden by default: the episode ended on an upstream env bug before the
+  // true match was ever judged, so there is no verdict to explain and nothing to classify.
+  if (r.discarded && !showDisc) return false;
   const t = document.getElementById('f-type').value;
   const k = document.getElementById('f-kind').value;
   const q = document.getElementById('f-q').value.trim().toLowerCase();
@@ -322,7 +350,7 @@ function renderList() {{
       <div class="d"><span class="num">${{r.num}}</span>${{r.assignee ? `<span class="who who-${{esc(r.assignee)}}">${{esc(r.assignee)}}</span>` : ''}}${{esc(r.desc)}}</div>
       <div class="m">
         <span class="chip">${{esc(r.type)}}</span>
-        <span class="chip fail">${{esc(r.kind)}}${{r.relation ? ' · ' + esc(r.relation) : ''}}</span>
+        ${{r.discarded ? '<span class="chip warn">harness discard</span>' : ''}}<span class="chip fail">${{esc(r.kind)}}${{r.relation ? ' · ' + esc(r.relation) : ''}}</span>
         <span>${{r.n_succ}}/${{r.n_dist}} correct · ${{r.n_q}} questions</span>
       </div>
     </button>`).join('') || '<p class="empty">No runs match these filters.</p>';
@@ -361,7 +389,17 @@ function renderDetail(i) {{
       <figcaption><b>oracle's image</b> — every answer describes this, never the candidate</figcaption>
     </figure>` : '';
 
-  const head = `<div class="card">
+  const discNote = r.discarded ? `<div class="card" style="border-color:var(--warn)">
+    <h3 style="color:var(--warn)">harness discard — not a method failure</h3>
+    <p style="margin:0 0 8px">The env stopped handing back new candidates after a correct
+    conclusion (a known upstream bug on the training set), so the eval loop broke here. This run
+    got <b>${{r.n_succ}} of ${{r.n_dist}}</b> candidates right and was then cut off — the final
+    candidate, which is the true match, was never judged.</p>
+    <p style="margin:0; color:var(--muted)">There is no verdict on the oracle's image to explain,
+    and nothing here to classify. Counted in the discard rate, excluded from review.</p>
+  </div>` : '';
+
+  const head = discNote + `<div class="card">
     <h3>case ${{r.num}}${{r.assignee ? ` — reviewer <span class="who who-${{esc(r.assignee)}}">${{esc(r.assignee)}}</span>` : ''}}</h3>
     ${{tgt}}
     <dl class="kv">
@@ -410,9 +448,9 @@ list.addEventListener('click', e => {{
 }});
 // f-who included here: it was omitted once, and the reviewer dropdown then rendered but did
 // nothing when changed. Guarded because the element only exists when --assignees was passed.
-['f-who', 'f-type', 'f-kind', 'f-q'].forEach(id => {{
+['f-who', 'f-type', 'f-kind', 'f-q', 'f-disc'].forEach(id => {{
   const el = document.getElementById(id);
-  if (el) el.addEventListener('input', renderList);
+  if (el) el.addEventListener(el.type === 'checkbox' ? 'change' : 'input', renderList);
 }});
 renderList();
 </script>
@@ -436,8 +474,14 @@ def main() -> int:
     if not records:
         raise SystemExit("no failed runs found — nothing to report")
 
+    real, discarded = split_discards(records)
+    if not real:
+        raise SystemExit("every failed run is a harness discard — nothing to review")
+
     names = [n.strip() for n in args.assignees.split(",") if n.strip()]
-    number_and_assign(records, names)
+    number_and_assign(real, names)
+    # Reviewable cases first, so the default view and the numbering agree on ordering.
+    records = real + discarded
 
     kinds = sorted({r["kind"] for r in records})
     types = sorted({r["type"] for r in records})
@@ -448,7 +492,7 @@ def main() -> int:
     TINTS_DARK = [("#1d2a38", "#8fb6e0"), ("#1b2b25", "#6cc39c"), ("#302620", "#d4a273")]
     who_css = who_select = who_stats = ""
     if names:
-        per = Counter(r["assignee"] for r in records)
+        per = Counter(r["assignee"] for r in real)
         rules = []
         for i, n in enumerate(names):
             bg, fg = TINTS[i % len(TINTS)]
@@ -462,7 +506,7 @@ def main() -> int:
         # Each reviewer owns one contiguous span, so show it -- "Jaemin 82-162" is the useful fact.
         spans = {}
         for n in names:
-            nums = [r["num"] for r in records if r.get("assignee") == n]
+            nums = [r["num"] for r in real if r.get("assignee") == n]
             spans[n] = (min(nums), max(nums)) if nums else (0, 0)
         who_select = (
             '<select id="f-who"><option value="">reviewer: everyone</option>'
@@ -483,7 +527,8 @@ def main() -> int:
         who_select=who_select,
         who_stats=who_stats,
         title_esc=html.escape(args.title),
-        n_fail=failed,
+        n_review=len(real),
+        n_disc=len(discarded),
         n_runs=runs,
         pass_rate=f"{100 * (runs - failed) / runs:.1f}%" if runs else "—",
         type_opts="".join(f'<option value="{html.escape(t)}">{html.escape(t)}</option>' for t in types),
