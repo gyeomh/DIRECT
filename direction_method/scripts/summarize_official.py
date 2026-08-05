@@ -48,6 +48,23 @@ def summarize(log_path: Path, episodes_path: Path, *, questioner: str, oracle_ba
     complete = [(i, q) for i, s, q in zip(ids, succ, quest) if s == counts[i]]
 
     total_score = sum(10 - q for _, q in complete)
+
+    # env.py's own reward, the ONLY scoring formula defined anywhere in the upstream repo
+    # (_compute_reward: +10 per correct conclusion, -10 per wrong one, -1 per question). The
+    # README states the objective in words -- "maximize the number of correct conclusions while
+    # asking as few questions as possible" -- but gives no formula, so both are reported and
+    # neither is presented as "the" official number.
+    #
+    # An episode ends on its FIRST wrong conclusion (ENV.md §1), so an episode that did not fully
+    # succeed contains exactly one wrong conclusion, unless it ran out of steps/time instead.
+    # Truncation is not distinguishable from the gzip log, so this treats every incomplete episode
+    # as having taken the -10; that is the pessimistic reading and is flagged as such.
+    complete_ids = {i for i, _ in complete}
+    env_reward = 0
+    for i, s, q in zip(ids, succ, quest):
+        env_reward += 10 * s - q
+        if i not in complete_ids:
+            env_reward -= 10
     description_type = os.path.basename(log_path).split("_train_")[0].split("Questioner_")[-1]
 
     return {
@@ -63,6 +80,11 @@ def summarize(log_path: Path, episodes_path: Path, *, questioner: str, oracle_ba
         "mean_score": total_score / total_episodes,
         "total_questions": sum(quest),
         "scoring": {"complete_success": "10 - number_of_questions", "failure": 0},
+        # Secondary, from env.py's _compute_reward -- the repo's only numeric scoring. Reported
+        # alongside because the README defines the objective in words but no formula at all.
+        "_env_reward_total": env_reward,
+        "_env_reward_mean": env_reward / total_episodes,
+        "_env_reward_scoring": "+10 per correct conclusion, -10 per wrong one, -1 per question",
         # Not part of the reference format -- kept so the discarded-episode denominator (ENV.md §6
         # bug 3) is never lost, and so accuracy over completed episodes stays visible next to it.
         "_logged_episodes": len(ids),
@@ -112,6 +134,8 @@ def main() -> int:
             "mean_score": sc / ev,
             "total_questions": sum(s["total_questions"] for s in summaries),
             "scoring": {"complete_success": "10 - number_of_questions", "failure": 0},
+            "_env_reward_total": sum(s["_env_reward_total"] for s in summaries),
+            "_env_reward_scoring": "+10 per correct conclusion, -10 per wrong one, -1 per question",
         }
         (out_dir / "ALL.json").write_text(json.dumps(overall, indent=2))
         print(json.dumps(overall, indent=2))
