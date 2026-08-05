@@ -165,7 +165,17 @@ def main() -> int:
     ap.add_argument("--description-type", default="category")
     ap.add_argument("--oracle", default="stub", choices=["upstream", "stub", "mock"])
     ap.add_argument("--local", type=int, default=0, help="passed through to eval_model.py; only meaningful with --oracle upstream")
+    ap.add_argument(
+        "--use-cache", action="store_true",
+        help="Replay answers from artifacts/cache instead of querying the model. OFF by default: "
+             "this script's output is a reported number, and a cached run measures the run that "
+             "filled the cache, not this one. Use only to re-derive an earlier result cheaply.",
+    )
     args = ap.parse_args()
+
+    # Default off -- see LLMClient.__init__ for why caching and measuring want opposite things.
+    # setdefault, so an explicit VLM_USE_CACHE in the environment still wins.
+    os.environ.setdefault("VLM_USE_CACHE", "1" if args.use_cache else "0")
 
     # eval_model.py runs with cwd=REPO_ROOT and constructs the questioner as `YourQuestioner(info)`,
     # so LLMClient's relative default cache dir would resolve to a fresh, cold cache at the repo

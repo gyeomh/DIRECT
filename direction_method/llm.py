@@ -212,10 +212,31 @@ class LLMClient:
         port: int | None = None,
         temperature: float = 0.0,
         disable_thinking: bool = False,
+        use_cache: bool | None = None,
     ):
         self.model_id = model_id
         self.timeout_s = timeout_s
         self.time_required = 0.0
+
+        # The disk cache is a DEVELOPMENT tool, not a measurement one, and the two want opposite
+        # things. Iterating on one module wants instant replay of everything it isn't changing.
+        # Measuring wants the model actually queried, every run.
+        #
+        # It exists because every call runs at temperature=0.0, so "same model + same prompt +
+        # same image -> same answer" is nominally true. But vllm is not bit-deterministic even at
+        # temperature 0 -- batching, chunked prefill and kernel scheduling all move results
+        # between runs, which is why context_parser's own validation retry exists and why §10
+        # describes it as "a defense against serving-time nondeterminism, not a guaranteed fix".
+        # Caching freezes one draw from that distribution, so a cached sweep cannot show run-to-run
+        # variance, and a change that does not alter prompt text (post-processing like zone_gen's
+        # edge filter) produces byte-identical "results" no matter what it did.
+        #
+        # So: on for development, OFF for anything whose number gets reported. VLM_USE_CACHE=0
+        # turns it off process-wide for callers that cannot pass this argument (eval_model.py
+        # builds the questioner, and its LLMClient, itself).
+        if use_cache is None:
+            use_cache = os.environ.get("VLM_USE_CACHE", "1") != "0"
+        self.use_cache = use_cache
         # Call accounting. A run served entirely from disk cache produces output identical to one
         # that actually queried the model -- that indistinguishability is what let FakeVLM output
         # pass as real in full_sweep_v1/v2, and what let a fully-cached replay pass as a fresh
@@ -286,8 +307,12 @@ class LLMClient:
         image=None,
         *,
         response_schema: dict | None = None,
-        use_cache: bool = True,
+        use_cache: bool | None = None,
     ) -> LLMResult:
+        # None means "whatever this client was built with" -- an explicit True/False at the call
+        # site still wins (context_parser's validation retry passes False deliberately).
+        if use_cache is None:
+            use_cache = self.use_cache
         img_hash = image_hash(image) if image is not None else None
         key = _cache_key(self.model_id, prompt, img_hash)
 

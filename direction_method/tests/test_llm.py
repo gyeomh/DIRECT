@@ -103,6 +103,38 @@ def test_cache_write_is_atomic_no_leftover_tmp_files(tmp_path):
     assert tmp_files == []
 
 
+def test_client_can_be_built_with_caching_off(tmp_path):
+    """Measurement runs must query the model every time -- see LLMClient.__init__'s note on why
+    temperature=0 does not make a cached run equivalent to a fresh one under vllm."""
+    from llm import CALL_STATS, reset_call_stats
+
+    reset_call_stats()
+    client = LLMClient("m", backend="fake", cache_dir=tmp_path, use_cache=False)
+    for _ in range(3):
+        client.call("prompt", IMG)
+    assert (CALL_STATS["hits"], CALL_STATS["misses"]) == (0, 3)  # never replayed
+    assert list(client.cache_dir.glob("*.json")) == []  # and never written
+
+
+def test_use_cache_env_var_turns_caching_off_process_wide(tmp_path, monkeypatch):
+    # eval_model.py builds the questioner's LLMClient itself, so env is the only channel a driver
+    # has to force real queries on that path.
+    monkeypatch.setenv("VLM_USE_CACHE", "0")
+    client = LLMClient("m", backend="fake", cache_dir=tmp_path)
+    assert client.use_cache is False
+    client.call("prompt", IMG)
+    assert list(client.cache_dir.glob("*.json")) == []
+
+
+def test_explicit_use_cache_false_at_call_site_still_wins(tmp_path):
+    # context_parser's validation retry passes use_cache=False deliberately to bypass a hit.
+    client = LLMClient("m", backend="fake", cache_dir=tmp_path)
+    assert client.use_cache is True
+    client.call("prompt", IMG)
+    r = client.call("prompt", IMG, use_cache=False)
+    assert r.cached is False
+
+
 def test_call_stats_distinguish_a_cache_replay_from_a_real_run(tmp_path):
     """A run served entirely from cache is otherwise indistinguishable from one that queried the
     model -- the same blindness that let FakeVLM output pass as real in full_sweep_v1/v2, and a
