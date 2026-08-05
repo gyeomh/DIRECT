@@ -26,19 +26,43 @@ from PIL import Image
 
 # Roughly 12 KB of base64 per image at these settings; the budget check below reports the real
 # total so the caller can lower them if a sweep has an unusually large number of failures.
-THUMB_PX = 340
-JPEG_QUALITY = 62
+THUMB_PX = 448
+JPEG_QUALITY = 72
 
 
-def encode_image(path: Path) -> str | None:
-    try:
-        im = Image.open(path).convert("RGB")
-    except (OSError, ValueError):
-        return None
-    im.thumbnail((THUMB_PX, THUMB_PX))
-    buf = io.BytesIO()
-    im.save(buf, "JPEG", quality=JPEG_QUALITY, optimize=True)
-    return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
+class ImageBank:
+    """Encode each source image once and hand out ids.
+
+    The same episode is run under all six description types, so the same candidate photo (and the
+    same target photo) recurs many times across failures -- 645 candidate references resolve to
+    197 distinct files. Embedding per reference tripled the file for nothing; interning them is
+    what leaves room for the target image at all.
+    """
+
+    def __init__(self):
+        self.by_path: dict[str, str] = {}
+        self.data: dict[str, str] = {}
+
+    def add(self, path) -> str | None:
+        if not path:
+            return None
+        p = Path(path)
+        key = str(p)
+        if key in self.by_path:
+            return self.by_path[key]
+        if not p.exists():
+            return None
+        try:
+            im = Image.open(p).convert("RGB")
+        except (OSError, ValueError):
+            return None
+        im.thumbnail((THUMB_PX, THUMB_PX))
+        buf = io.BytesIO()
+        im.save(buf, "JPEG", quality=JPEG_QUALITY, optimize=True)
+        img_id = f"i{len(self.data)}"
+        self.data[img_id] = "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
+        self.by_path[key] = img_id
+        return img_id
 
 
 def classify(reasoning: str) -> str:
@@ -95,7 +119,7 @@ def collect(log_root: Path) -> tuple[list, dict]:
     if not episodes_dir.is_dir():
         raise SystemExit(f"no episodes/ under {log_root}")
 
-    records, totals = [], Counter()
+    records, totals, bank = [], Counter(), ImageBank()
     for path in sorted(episodes_dir.glob("*.json")):
         d = json.loads(path.read_text())
         totals["runs"] += 1
@@ -111,17 +135,12 @@ def collect(log_root: Path) -> tuple[list, dict]:
 
         shown = []
         for c in cands:
-            img = None
             p = c.get("boxed_image_path") or c.get("raw_image_path")
-            if p:
-                p = Path(p)
-                if not p.is_absolute():
-                    p = log_root / p
-                if p.exists():
-                    img = encode_image(p)
+            if p and not Path(p).is_absolute():
+                p = log_root / p
             shown.append({
                 "index": c.get("index"),
-                "img": img,
+                "img": bank.add(p),
                 "bbox": c.get("bbox_2d"),
                 "zones": c.get("zone_list") or [],
                 "scene": c.get("scene", ""),
@@ -146,9 +165,13 @@ def collect(log_root: Path) -> tuple[list, dict]:
             "n_q": d.get("n_questions"),
             "target_category": cp.get("target_category", ""),
             "target_phrase": cp.get("target_phrase", ""),
+            # What the oracle is actually looking at. The questioner never sees this (ENV.md §5
+            # forbids reading it); a human reviewer needs it, because "was this verdict right?"
+            # cannot be answered without the photo the oracle was describing.
+            "target_img": bank.add(d.get("target_image_path")),
             "candidates": shown,
         })
-    return records, totals
+    return records, totals, bank
 
 
 PAGE = """<title>{title_esc}</title>
@@ -216,6 +239,12 @@ main {{ display:grid; grid-template-columns:minmax(280px,360px) 1fr; height:calc
 figure {{ margin:0 0 12px; }}
 figure img {{ max-width:100%; border-radius:8px; border:1px solid var(--line); display:block; }}
 figcaption {{ font-size:11.5px; color:var(--muted); margin-top:5px; }}
+/* Side by side, wrapping to stacked on narrow screens. Equal widths so neither photo reads as
+   the more important one -- the comparison is the point. */
+.pair {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:12px; }}
+.pair figure {{ margin:0; }}
+figure.target {{ max-width:300px; }}
+figure.target img {{ border-color:var(--accent); }}
 
 .step {{ border-left:2px solid var(--line); padding:8px 0 8px 12px; margin-bottom:2px; }}
 .step.bad {{ border-left-color:var(--fail); }}
@@ -266,6 +295,7 @@ code {{ font-family:var(--mono); }}
 </main>
 
 <script>
+const IMAGES = {images_json};
 const DATA = {data_json};
 const list = document.getElementById('list');
 const detail = document.getElementById('detail');
@@ -325,8 +355,15 @@ function renderDetail(i) {{
   current = i;
   [...list.querySelectorAll('.row')].forEach((b, j) => b.setAttribute('aria-current', j === i));
 
+  const tgt = r.target_img ? `
+    <figure class="target">
+      <img src="${{IMAGES[r.target_img]}}" alt="the image the oracle is describing" />
+      <figcaption><b>oracle's image</b> — every answer describes this, never the candidate</figcaption>
+    </figure>` : '';
+
   const head = `<div class="card">
     <h3>case ${{r.num}}${{r.assignee ? ` — reviewer <span class="who who-${{esc(r.assignee)}}">${{esc(r.assignee)}}</span>` : ''}}</h3>
+    ${{tgt}}
     <dl class="kv">
       <dt>description</dt><dd>${{esc(r.desc)}}</dd>
       <dt>true category</dt><dd>${{esc(r.category)}}</dd>
@@ -338,9 +375,15 @@ function renderDetail(i) {{
   </div>`;
 
   const cards = r.candidates.map((c, ci) => {{
+    // Candidate beside the oracle's image: the reviewer's core question is whether these two show
+    // the same object, so they must be comparable without scrolling between them.
     const img = c.img
-      ? `<figure><img src="${{c.img}}" alt="candidate ${{ci}} with the target boxed" />
-         <figcaption>candidate ${{ci}} · red box = grounded target · zones asked: ${{esc((c.zones || []).join(', ') || 'none')}}</figcaption></figure>`
+      ? `<div class="pair">
+           <figure><img src="${{IMAGES[c.img]}}" alt="candidate ${{ci}} with the target boxed" />
+             <figcaption>candidate ${{ci}} · red box = what zone_gen grounded · zones asked: ${{esc((c.zones || []).join(', ') || 'none')}}</figcaption></figure>
+           ${{r.target_img ? `<figure><img src="${{IMAGES[r.target_img]}}" alt="the oracle's image" />
+             <figcaption>oracle's image</figcaption></figure>` : ''}}
+         </div>`
       : '<p class="empty" style="padding:12px 0">image not available</p>';
     const before = Object.keys(c.checklist_before || {{}}).length
       ? `<dl class="kv">` + Object.entries(c.checklist_before).map(([k, v]) =>
@@ -389,7 +432,7 @@ def main() -> int:
     args = ap.parse_args()
 
     root = Path(args.log_root)
-    records, totals = collect(root)
+    records, totals, bank = collect(root)
     if not records:
         raise SystemExit("no failed runs found — nothing to report")
 
@@ -446,6 +489,7 @@ def main() -> int:
         type_opts="".join(f'<option value="{html.escape(t)}">{html.escape(t)}</option>' for t in types),
         kind_opts="".join(f'<option value="{html.escape(k)}">{html.escape(k)}</option>' for k in kinds),
         data_json=json.dumps(records, ensure_ascii=False),
+        images_json=json.dumps(bank.data),
     )
 
     out = Path(args.out)
