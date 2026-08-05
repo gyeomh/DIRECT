@@ -82,6 +82,37 @@ def build_oracle(kind: str):
     raise ValueError(f"unknown --oracle {kind!r}")
 
 
+def preflight_vllm() -> None:
+    """Fail loudly and accurately if the vllm server isn't reachable.
+
+    eval_model.py:153-158 wraps questioner construction in a BARE `except:` that re-raises a
+    fixed NotImplementedError("Insert here your Questioner class"). Every real construction
+    failure -- including `openai.APIConnectionError` from a server that is down, or on a different
+    port -- is swallowed and reported as though the questioner were never wired up. Confirmed by
+    running this script against a dead port. Checking here, before exec, keeps that misdirection
+    from costing an hour of debugging on the GPU box.
+    """
+    import json as _json
+    import urllib.error
+    import urllib.request
+
+    port = int(os.environ.get("VLM_PORT", 8000))
+    url = f"http://127.0.0.1:{port}/v1/models"
+    try:
+        with urllib.request.urlopen(url, timeout=5) as r:  # noqa: S310 -- fixed localhost URL
+            served = [m.get("id") for m in _json.load(r).get("data", [])]
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        raise SystemExit(
+            f"[preflight] No OpenAI-compatible server answering {url} ({e}).\n"
+            f"            Start vllm (pinned to GPU 2 -- project constraint) and/or set VLM_PORT.\n"
+            f"            Without this, eval_model.py's bare `except:` would report the real error\n"
+            f"            as 'Insert here your Questioner class', which is not what went wrong."
+        ) from e
+    if not served:
+        raise SystemExit(f"[preflight] {url} answered but serves no models.")
+    print(f"[preflight] vllm on port {port} serving: {served}")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("start_idx", type=int)
@@ -109,6 +140,9 @@ def main() -> int:
         if _ORACLE_BLOCK not in source:
             raise RuntimeError("Oracle-construction block not found — eval_model.py changed upstream, re-verify ENV.md.")
         source = source.replace(_ORACLE_BLOCK, _INJECTED_ORACLE_BLOCK)
+
+    if os.environ.get("VLM_BACKEND", "vllm") != "fake" or args.oracle in ("upstream", "stub"):
+        preflight_vllm()
 
     print(f"[run_official_eval] oracle={args.oracle} questioner_backend={os.environ.get('VLM_BACKEND', 'vllm')} "
           f"episodes=[{args.start_idx}, {args.end_idx}) type={args.description_type}")
