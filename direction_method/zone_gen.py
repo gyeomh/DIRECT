@@ -114,7 +114,10 @@ left, right, above, below,
 left-top, right-top, left-bottom, right-bottom,
 on
 
-Directional keys refer to the area of the image on that side of the red box.
+Directional keys refer to the area of the image on that side of the red box, as
+the image is viewed on screen — screen-left is "left", screen-right is "right".
+Never mirror this as if the target object itself were a person facing the camera;
+the red box has no facing direction, only a position in the frame.
 "on" means the top surface of the target itself — objects resting on it.
 
 === INCLUDE A REGION WHEN ===
@@ -344,21 +347,33 @@ def _fallback_from_bbox_margins(bbox_2d) -> list:
 
 @dataclass
 class ResolvedZones:
-    relations: list  # final relation keys, after fallback + checklist dedup; empty is legitimate
+    relations: list  # final relation keys, after fallback + edge filter + checklist dedup; empty is legitimate
     used_fallback: bool
-    edge_touch_log: list  # VLM-returned keys whose edge is touched by the box -- logging only
+    edge_touch_log: list  # VLM-returned keys whose edge is touched by the box -- now filtered, not just logged
 
 
 def resolve_relations(zones_result: ZonesResult, bbox_2d, existing_parent_keys) -> ResolvedZones:
     vlm_keys = _dedup_preserve_order([r["key"] for r in zones_result.raw_regions])
 
-    edge_touch_log = [k for k in vlm_keys if _EDGE_OF_KEY.get(k) and _touched_edges(bbox_2d)[_EDGE_OF_KEY[k]]]
+    touched = _touched_edges(bbox_2d)
+    edge_touch_log = [k for k in vlm_keys if _EDGE_OF_KEY.get(k) and touched[_EDGE_OF_KEY[k]]]
 
     used_fallback = False
     keys = vlm_keys
     if not keys:
+        # _fallback_from_bbox_margins already excludes touched edges by construction, so it
+        # needs no separate filtering below.
         keys = _fallback_from_bbox_margins(bbox_2d)
         used_fallback = True
+    elif edge_touch_log:
+        # [HARD FILTER -- 2026-08-05] Was logging-only ("decision for later, from the logged
+        # frequency" -- SPEC.md §5-2/§11). Real frequency came in at 6/25 (24%) on the first
+        # verification pass and kept recurring in production runs -- a direction whose edge the
+        # box touches has no image content there, geometrically, no matter what the VLM said
+        # (e.g. "left" on a box already flush against the frame's left edge). Drop it rather than
+        # asking an unanswerable question. "on" is exempt: _EDGE_OF_KEY["on"] is None, since "on"
+        # is the target's own top surface, not a frame-edge direction.
+        keys = [k for k in keys if k not in edge_touch_log]
 
     relations = [k for k in keys if k not in existing_parent_keys]
     return ResolvedZones(relations=relations, used_fallback=used_fallback, edge_touch_log=edge_touch_log)

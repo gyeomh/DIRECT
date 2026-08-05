@@ -25,7 +25,7 @@ from pathlib import Path
 DIRECTION_ROOT = Path(__file__).resolve().parents[1]
 VIEWER_DIR = DIRECTION_ROOT / "viewer"
 
-LOG_ROOT = Path(os.environ.get("VIEWER_LOG_ROOT", "/data/gyeom/coin_challenge/direction_method_logs/full_sweep_v1"))
+LOG_ROOT = Path(os.environ.get("VIEWER_LOG_ROOT", "/data/gyeom/coin_challenge/direction_method_logs/full_sweep_real"))
 EPISODES_DIR = LOG_ROOT / "episodes"
 PORT = int(os.environ.get("VIEWER_PORT", "8765"))
 

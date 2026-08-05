@@ -251,12 +251,25 @@ def test_resolve_relations_fallback_then_checklist_dedup_still_applies():
     assert out.used_fallback is True
 
 
-def test_edge_touch_log_flags_touched_direction_but_keeps_the_region():
-    # box touches the left edge, yet the VLM still returned "left" -- log it, don't drop it
+def test_edge_touch_log_flags_touched_direction_and_now_filters_it():
+    # box touches the left edge; the VLM still returned "left" -- logged AND dropped
+    # (hard filter added 2026-08-05: no image content past a touched edge, regardless of what
+    # the VLM said).
     zr = _zr(["left", "above"])
     out = resolve_relations(zr, bbox_2d=(0, 200, 800, 700), existing_parent_keys=set())
-    assert "left" in out.relations  # kept
-    assert out.edge_touch_log == ["left"]  # logged, since "above" doesn't touch an edge here
+    assert "left" not in out.relations  # filtered
+    assert out.relations == ["above"]
+    assert out.edge_touch_log == ["left"]  # still logged, since "above" doesn't touch an edge here
+
+
+def test_resolve_relations_filters_all_edge_touching_keys_to_empty():
+    # every VLM-returned key touches a bbox edge -- filtered to empty, same "legitimate no
+    # fallback" shape as the checklist-dedup-to-empty case (VLM DID answer, just all unusable).
+    zr = _zr(["left", "below"])
+    out = resolve_relations(zr, bbox_2d=(0, 200, 800, 1000), existing_parent_keys=set())
+    assert out.relations == []
+    assert out.used_fallback is False
+    assert set(out.edge_touch_log) == {"left", "below"}
 
 
 def test_edge_touch_log_ignores_on_key():

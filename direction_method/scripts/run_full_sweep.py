@@ -57,10 +57,13 @@ from oracle_stub import LocalOracleStandIn
 from patches.apply_patches import fix_answer_prompt_typo
 from questioner import DirectionMethodQuestioner
 
-MODEL_ID = "Qwen/Qwen3-VL-30B-A3B-Instruct"
+MODEL_ID = os.environ.get("SWEEP_MODEL_ID", "Qwen/Qwen3-VL-30B-A3B-Instruct")
+# Thinking-capable models (e.g. Qwen3.6) need enable_thinking forced off per call, see llm.py's
+# LLMClient(disable_thinking=...) -- irrelevant/no-op for Instruct-only models like Qwen3-VL.
+DISABLE_THINKING = os.environ.get("SWEEP_DISABLE_THINKING", "0") == "1"
 ALL_TASK_TYPES = ["category", "color", "context", "color_feature", "color_context", "color_context_feature"]
 MAX_LOOP_ITERS = 100  # generous margin over env.max_steps (60)
-CALL_TIMEOUT_S = 60.0  # generous: concurrent workers share one GPU, individual calls slow under load
+CALL_TIMEOUT_S = float(os.environ.get("SWEEP_CALL_TIMEOUT_S", "60.0"))  # generous: concurrent workers share one GPU, individual calls slow under load
 
 N_EPISODES = int(os.environ.get("SWEEP_EPISODES", "167"))
 TASK_TYPES = os.environ.get("SWEEP_TASK_TYPES", ",".join(ALL_TASK_TYPES)).split(",")
@@ -97,7 +100,7 @@ def run_one(episode_idx: int, task_type: str) -> dict:
     (construction, loop, env) is caught and recorded as the outcome instead.
     """
     out_path = _record_path(episode_idx, task_type)
-    llm_client = LLMClient(MODEL_ID, cache_dir=CACHE_DIR, timeout_s=CALL_TIMEOUT_S)
+    llm_client = LLMClient(MODEL_ID, cache_dir=CACHE_DIR, timeout_s=CALL_TIMEOUT_S, disable_thinking=DISABLE_THINKING)
     oracle = LocalOracleStandIn(llm_client)
     env = QAEnv(oracle, REPO_ROOT / "episodes_train.jsonl", task_type=task_type)
 

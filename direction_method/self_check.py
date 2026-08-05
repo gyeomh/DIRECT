@@ -59,6 +59,9 @@ Not confirmed is not the same as contradicted. When in doubt, answer "yes".
    foreground or background. Same for the other directions.
    "on" means resting on the object's top surface.
    If the object is present anywhere plausibly in that region -> yes.
+   "left"/"right" are always screen-left/screen-right as the image is viewed —
+   the same convention a person points with while looking at the photo. Never
+   mirror them as if the object in the region were a person facing the camera.
 
 5. MULTIPLE OBJECTS IN THE REGION. If the region holds several objects and ANY
    ONE of them matches the assertion -> yes. The claim need not describe the
@@ -77,6 +80,20 @@ Not confirmed is not the same as contradicted. When in doubt, answer "yes".
 9. SPEAKER FRAMING. Ignore phrases like "I can see", "In this image", "There is".
    Judge only the content that follows.
 
+10. RELATED OBJECT, SIMILAR SHAPE, MATCHING COLOR. The claim names one specific
+    object, and the region holds a different but closely related object — same
+    general category, similar silhouette — AND the color the claim states matches
+    what you see. Do not require the exact object name; a shared shape/silhouette
+    plus matching color is enough.
+    Claim: "a black music note decoration" / Image: a black music staff/sheet
+    decoration, similar shape                                        -> yes
+    Claim: "a brown wooden shelf" / Image: a brown wooden bookshelf   -> yes
+    Claim: "a round mirror" / Image: a round clock, similar shape but
+    a clock is not a mirror-family object                            -> no (rule 2 below)
+    This only covers related objects with matching color and shape — it does not
+    relax rule 1 (wrong attribute) or rule 2 (a genuinely different, unrelated
+    object type still contradicts).
+
 === THESE ARE CONTRADICTIONS — answer "no" ===
 
 1. WRONG ATTRIBUTE, CLEARLY VISIBLE. The object is plainly visible and the stated
@@ -84,7 +101,8 @@ Not confirmed is not the same as contradicted. When in doubt, answer "yes".
    Claim: "the cabinet is navy blue" / Image: the cabinet is clearly white -> no
 
 2. WRONG OBJECT TYPE. The region clearly holds something of a different kind, and
-   nothing matching the assertion is anywhere in that region.
+   nothing matching the assertion is anywhere in that region. Does not apply when
+   rule 10 above applies (related object, same shape, matching color).
    Claim: "a wooden table on the left" / Image: left side is a refrigerator and
    bare floor, no table of any kind -> no
 

@@ -25,6 +25,24 @@ non-"Target" entries are no longer asked of the model at all -- they are built m
 code from other_objects (`_merge_other_objects_into_checklist`), which is the one field confirmed
 reliable. The model's checklist output is now used for "Target" only, the one thing it already
 gets right at near-0% failure.
+
+RULE 1 was atomic decomposition (split every Target attribute into its own child) until
+2026-08-05 -- reversed, see SPEC.md SS2. Real sweeps showed the split routinely severing a
+shape/material word from the color it modified (e.g. "it is mirrored" / "it is silver" as two
+disconnected children), and the dominant real failure mode is self_check false-rejecting genuine
+matches, not the ambiguity-from-occlusion atomicity was meant to prevent. Target attributes are
+now written as one combined assertion.
+
+Depth cues ("in front of", "behind") had no worked example before 2026-08-05, and the model
+guessed a 2D screen direction for them -- confirmed on a live run: "desk positioned in front of a
+window" produced key="below" for the window, which is physically nonsensical (windows are
+wall-height, not below desk-height) and, because the checklist persists and grows for the whole
+episode (SPEC.md SS2), poisoned every candidate in that episode with an unsatisfiable assertion
+(self_check correctly says "no" every time, since there truly is no window below the desk in any
+photo) -- one bad entry from episode start fails the whole episode regardless of which candidate
+is the real match. Fixed by mapping depth cues to "next to" (SS REGION KEYS below), the same
+escape hatch already used for "no side given" -- this project's region keys are 2D-screen-only, so
+a depth relation has no honest directional answer among them.
 """
 
 import json
@@ -75,12 +93,26 @@ left, right, above, below,
 left-top, right-top, left-bottom, right-bottom,
 on, next to, Target
 
-Relations are from the TARGET's point of view. Reverse the description's wording
-when needed:
+Relations are from the TARGET's point of view: describe where the OTHER object
+sits relative to the target. Reverse the description's wording when needed:
   "cabinet UNDER a countertop"  -> the countertop is ABOVE the cabinet -> "above"
   "bed BESIDE a nightstand"     -> no side given                       -> "next to"
 
-Use "next to" only when the description gives no side.
+"left"/"right" (and the four corner keys) are always screen-left/screen-right as
+the photo is viewed -- the same convention a person points with while looking at
+the image. Never mirror them as if the target object itself were a person facing
+the camera. This is the only convention used anywhere in this pipeline (self_check,
+zone_gen, the oracle questions) -- do not reinterpret it per description.
+
+DEPTH cues -- "in front of", "behind" -- describe distance from the camera, not a
+2D screen direction, and this project's region keys are 2D-screen-only (no "behind"
+key exists). Map both to "next to", the same escape hatch used for "beside"/no-side
+cues, rather than guessing a screen direction:
+  "desk in front of a window"   -> no 2D side given                    -> "next to"
+  "shelf behind a chair"        -> no 2D side given                    -> "next to"
+
+Use "next to" only when the description gives no side, including for the DEPTH
+case above.
 
 === PARTS vs SEPARATE OBJECTS ===
 
@@ -119,8 +151,10 @@ or the target — those are added later from the region key.
 
 === RULES ===
 
-1. ATOMIC. One fact per assertion. Split compounds.
-   "navy blue with brass handles" -> "it is navy blue", "it has brass handles"
+1. ONE COMBINED ASSERTION. Do not split the target's attributes into separate
+   facts -- state everything the description says about the target's own
+   attributes in a single assertion.
+   "navy blue with brass handles" -> "it is navy blue and has brass handles"
 
 2. NO INVENTION. Add nothing the description does not state.
 
@@ -139,7 +173,7 @@ or the target — those are added later from the region key.
 {"target_category": "kitchen lower cabinet",
  "target_phrase": "navy blue kitchen lower cabinet",
  "other_objects": [],
- "checklist": {"Target": ["it is navy blue", "it has brass handles"]}}
+ "checklist": {"Target": ["it is navy blue and has brass handles"]}}
 
 "Kitchen lower cabinet situated beneath a white countertop"
 {"target_category": "kitchen lower cabinet",
@@ -166,17 +200,23 @@ or the target — those are added later from the region key.
  "other_objects": [{"object": "open shelving", "cue": "next to", "key": "next to"}],
  "checklist": {"Target": ["it is green"]}}
 
+"Desk positioned in front of a window"
+{"target_category": "desk",
+ "target_phrase": "desk",
+ "other_objects": [{"object": "a window", "cue": "in front of", "key": "next to"}],
+ "checklist": {}}
+
 "Dark gray slatted heater beneath a round mirror"
 {"target_category": "heater",
  "target_phrase": "dark gray slatted heater",
  "other_objects": [{"object": "a round mirror", "cue": "beneath", "key": "above"}],
- "checklist": {"Target": ["it is dark gray", "it is slatted"]}}
+ "checklist": {"Target": ["it is dark gray and slatted"]}}
 
 "Large beige carpet under a wooden coffee table"
 {"target_category": "carpet",
  "target_phrase": "large beige carpet",
  "other_objects": [{"object": "a wooden coffee table", "cue": "under", "key": "above"}],
- "checklist": {"Target": ["it is large", "it is beige"]}}
+ "checklist": {"Target": ["it is large and beige"]}}
 
 "Gray couch with pillows under three framed artworks"
 {"target_category": "couch",
