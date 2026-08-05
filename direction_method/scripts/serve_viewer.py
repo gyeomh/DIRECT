@@ -25,7 +25,9 @@ from pathlib import Path
 DIRECTION_ROOT = Path(__file__).resolve().parents[1]
 VIEWER_DIR = DIRECTION_ROOT / "viewer"
 
-LOG_ROOT = Path(os.environ.get("VIEWER_LOG_ROOT", "/data/gyeom/coin_challenge/direction_method_logs/full_sweep_real"))
+# Repo-relative default so a fresh clone works with no configuration; matches run_full_sweep.py's
+# own default log root. Point VIEWER_LOG_ROOT at a data disk for sweeps stored elsewhere.
+LOG_ROOT = Path(os.environ.get("VIEWER_LOG_ROOT", str(Path(__file__).resolve().parents[1] / "artifacts" / "sweeps" / "latest")))
 EPISODES_DIR = LOG_ROOT / "episodes"
 PORT = int(os.environ.get("VIEWER_PORT", "8765"))
 

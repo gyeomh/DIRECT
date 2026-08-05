@@ -1,7 +1,9 @@
 *.pyc
+.claude/
 .pytest_cache/
 QA_eval/
 __pycache__/
+artifacts/cache/
 coin_agent/artifacts/cache/
 coin_agent/artifacts/priors.json
 direction_method/agent_bridge_queue/
@@ -9,9 +11,11 @@ direction_method/artifacts/agent_verification/
 direction_method/artifacts/cache/
 direction_method/artifacts/cache_contaminated_backup_*/
 direction_method/artifacts/self_check_failures.json
+direction_method/artifacts/sweeps/
 direction_method/artifacts/zone_gen_gallery.html
 direction_method/artifacts/zone_gen_verify/
 images
 manual_play/queue/*.jsonl
 results/*.gzip.json
-artifacts/cache/
+results/summary*/
+results_*/
