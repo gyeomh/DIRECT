@@ -204,6 +204,18 @@ class DirectionMethodQuestioner(QuestionerInterface):
     # --- main state machine --------------------------------------------------------------------
 
     def ask_or_conclude(self, observation: dict) -> dict:
+        # `time_required` accumulates wall-clock spent inside this method, matching what upstream's
+        # own QuestionerLocalVLM.ask_or_conclude times (start_time/end_time around its work).
+        # eval_model.py reads it as a plain attribute for logging, so leaving it at 0 would report
+        # a self-measured number dishonestly (ENV.md §4/§5). Distinct from the budget clock, which
+        # runs on _episode_start and measures elapsed time, not time consumed.
+        _t0 = time.time()
+        try:
+            return self._ask_or_conclude(observation)
+        finally:
+            self.time_required += time.time() - _t0
+
+    def _ask_or_conclude(self, observation: dict) -> dict:
         self.step_count += 1
         image = observation["image"]
         answer = observation["answer"]

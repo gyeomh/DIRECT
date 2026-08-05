@@ -280,6 +280,46 @@ def test_relation_already_a_checklist_parent_key_is_not_asked_again(tmp_path):
     assert "above" in a2["question"]
 
 
+# --- edge filter empties the relation set (zone_gen.py's 2026-08-05 hard filter) -----------------
+
+
+def test_all_relations_edge_filtered_concludes_match_on_a_later_candidate(tmp_path):
+    """End-to-end consequence of zone_gen's edge-touch hard filter, at the questioner level.
+
+    The box is flush against the left and bottom frame edges, and every key the VLM returned sits
+    past one of those edges -- so `resolve_relations` filters the whole set away and hands back an
+    empty relation list. That is the SAME empty list the checklist-dedup path produces, and the
+    questioner treats both identically: an empty queue concludes MATCH.
+
+    On a later candidate (the mandatory Target question already spent, so nothing is force-queued)
+    this means concluding match having asked zero questions about this candidate -- the checklist
+    passing is the only evidence behind it. Deliberate and covered at the zone_gen level by
+    test_zone_gen.py::test_resolve_relations_filters_all_edge_touching_keys_to_empty; pinned here
+    so the questioner-level consequence can't change silently.
+    """
+    q, scripted = make_questioner(
+        tmp_path,
+        other_objects=[{"object": "wooden tiles", "cue": "on", "key": "above"}],
+        locate_boxes=[{"bbox_2d": [0, 200, 800, 1000], "label": "t", "note": "n"}],
+        zones_regions=[{"note": "n", "key": "left"}, {"note": "n2", "key": "below"}],
+        self_check_verdicts=["yes", "yes", "yes"],
+    )
+    # Candidate 1 spends the mandatory Target question, then concludes.
+    a1 = call(q, IMG_A, answer=None)
+    assert "location and visual appearance" in a1["question"]
+    a2 = call(q, IMG_A, answer="a navy blue cabinet")
+    assert a2["conclusion"] == 1
+
+    # Candidate 2: checklist passes, "left"/"below" are both filtered by the edge check, and the
+    # Target question is already spent -> match, zero questions asked for this candidate.
+    before = q.n_questions
+    a3 = call(q, IMG_B, answer=None)
+    assert a3["conclusion"] == 1
+    assert q.n_questions == before
+    assert q.candidate_logs[-1].zone_list == []
+    assert q.candidate_logs[-1].questions_asked == 0
+
+
 # --- per-candidate caching: zone_gen not recomputed within a candidate -------------------------
 
 
@@ -452,6 +492,20 @@ def test_invariant_holds_across_many_varied_scenarios(tmp_path):
 
 
 # --- rich logging: interactions, checklist snapshots, zone_gen detail -------------------------
+
+
+def test_time_required_accumulates_across_calls_and_resets(tmp_path):
+    # eval_model.py:233 logs questioner.time_required; it must be a real self-measured number,
+    # not the 0.0 it is initialized to (ENV.md §4/§5 -- self-reported values must be honest).
+    q, scripted = make_questioner(tmp_path, checklist={})
+    assert q.time_required == 0.0
+    call(q, IMG_A, answer=None)
+    after_one = q.time_required
+    assert after_one > 0.0
+    call(q, IMG_A, answer="a")
+    assert q.time_required > after_one  # accumulates, not overwritten
+    q.reset_time()
+    assert q.time_required == 0.0
 
 
 def test_context_parser_result_and_initial_checklist_are_exposed(tmp_path):
