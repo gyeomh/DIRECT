@@ -2,8 +2,10 @@
 
 Method specification. Read `ENV.md` first for the harness constraints.
 
-Model: `Qwen/Qwen3-VL-30B-A3B-Instruct` for **all four modules and the local stand-in oracle**.
-Instruct, not Thinking.
+Model: `Qwen/Qwen3.6-35B-A3B-FP8` for **all four modules and the local stand-in oracle** (adopted
+2026-08-05, see §13's model-swap section; `questioner.py`'s `DEFAULT_MODEL_ID` is the source of
+truth). Thinking forced off per call. The previous default, `Qwen/Qwen3-VL-30B-A3B-Instruct`, is
+the superseded baseline — every comparison below that names it is historical.
 
 ---
 
@@ -519,6 +521,29 @@ descriptions crashed this way before the cap was added).
 
 ## 11. Open items
 
+- **OPEN, found 2026-08-06 — `"target ON x"` files `x` under `on` instead of `below`.** The
+  description says the target rests on something; `context_parser` keeps the surface word and files
+  that something under `on`, which `templates.region_for` renders as *"on top of the {target}"* —
+  the target's own top surface. So `"Terracotta vase on a wooden cabinet"` becomes the assertion
+  *"a wooden cabinet"* to be checked *on top of the vase*, which no image can satisfy. Because it
+  lands in the INITIAL checklist, it kills every candidate in the episode including the true match.
+  Measured on `full_sweep_qwen36_v2`: of 41 runs whose description has a `"target on X"` phrase, 26
+  filed `X` under `on`, and 17 of those failed (22 distinct descriptions, repeated across
+  description types).
+
+  Two sub-cases, and they want different fixes:
+  - *vertical support* — `"armchair on a red rug"`, `"blanket on a bed"`, `"vase on a cabinet"`.
+    The object is **below** the target.
+  - *mounting surface* — `"clock hanging on a beige wall"`, `"grab bar on the tiled wall"`. The
+    wall is behind the target, not above or below it; this is the same depth problem the
+    `"in front of"`/`"behind"` rule already solves, and wants `next to`.
+
+  §10's reversal rule only carries one worked example (`"cabinet UNDER a countertop"` → `above`),
+  and `on` is additionally the one relation word whose prompt meaning (*the target's own top
+  surface*) differs from its meaning in ordinary description text — so echoing it looks correct to
+  the model. Not fixed yet: deferred deliberately until the three-reviewer error analysis of
+  `full_sweep_qwen36_v2` finishes, so this is corrected together with whatever else that surfaces
+  and measured against one baseline rather than in a sequence of one-off reruns.
 - Logprob tie-break and follow-up question construction (§7) — deferred.
 - `max_pixels` value.
 - **Resolved, 2026-08-05.** The edge-touch leak logged by `zone_gen`'s geometry cross-check (§5-2)
@@ -943,3 +968,44 @@ own workaround for ENV.md §6 bug 3 (discard, don't crash, if a conclusion shoul
 candidate but didn't). Result: 167/167 constructed and completed cleanly, zero crashes, zero
 invalid actions, zero discards. See the note in §11 for why every episode resolves in exactly one
 candidate under `FakeVLM`, and why that's expected rather than a red flag.
+
+---
+
+## 14. Official-path evaluation (2026-08-06)
+
+Everything above was measured through `run_full_sweep.py`, which reimplements the candidate loop.
+This is the first full measurement through **upstream's own `eval_model.py`** — the code path the
+real evaluation uses — driven by `scripts/run_official_eval.py`, which patches upstream's source in
+memory only (ENV.md §6) and leaves every upstream file byte-identical on disk.
+
+**Setup.** `Qwen/Qwen3.6-35B-A3B-FP8` on one GPU, `vllm 0.19.0`, `--max-model-len 8192`, prefix
+caching on, thinking forced off. Oracle: `LocalOracleStandIn` on the same server (so the timing
+numbers do NOT reflect the real setup, where §8 requires a separate one — the accuracy numbers are
+unaffected). **Disk cache disabled**: 12,448 model queries, 0 cache hits, verified by `CALL_STATS`.
+1002 runs, 1h55m, zero crashes, zero invalid actions.
+
+| type | full success | accuracy | score | mean | questions | discards |
+|---|---|---|---|---|---|---|
+| category | 139 | 83.2% | 807 | 4.83 | 643 | 10 |
+| color | 127 | 76.0% | 750 | 4.49 | 601 | 10 |
+| context | 131 | 78.4% | 821 | 4.92 | 534 | 10 |
+| color_feature | 115 | 68.9% | 697 | 4.17 | 558 | 10 |
+| color_context | 119 | 71.3% | 729 | 4.37 | 546 | 10 |
+| color_context_feature | 120 | 71.9% | 769 | 4.60 | 497 | 10 |
+| **all** | **751** | **75.0%** | **4573** | **4.56** | **3379** | **60** |
+
+Denominator is 1002 attempted, discards included and scored 0 (ENV.md §6 bug 3, 6% of runs).
+Summary JSONs: `artifacts/official_eval_qwen36/`.
+
+**This reproduces `full_sweep_qwen36_v2` (759/1002, 75.7%) to within 0.7 points**, from a cold
+cache and through a different harness path — so the cached parallel sweeps were not inflated, and
+the result does not depend on which loop drives it.
+
+**Scoring.** Upstream's README states the objective in words ("maximize the number of correct
+conclusions while asking as few questions as possible") and defines no formula; `env.py`'s
+`_compute_reward` (+10 correct / −10 wrong / −1 per question) is the only numeric scoring in the
+repo. Under the reviewers' `10 − questions` formula the ceiling for 751 wins is 7,510 and the
+actual is 4,573 — **45% of the attainable score is spent on questions**. Accuracy and score already
+disagree on ranking: `context` is 3rd on accuracy but 1st on mean score (fewest questions), while
+`color` is 2nd on accuracy and 4th on score. Reducing questions is therefore worth real points even
+at some accuracy cost — quantified after the error analysis, not before.
