@@ -235,7 +235,7 @@ def _image_size(image) -> tuple:
 _locate_cache: dict = {}
 
 
-def locate(llm_client: LLMClient, image: np.ndarray, target_category: str, *, use_cache: bool = True) -> LocateResult:
+def locate(llm_client: LLMClient, image: np.ndarray, target_category: str, *, use_cache: bool | None = None) -> LocateResult:
     # Memoized per (original image hash, target_category), on top of llm.py's own disk cache, so
     # repeated ask_or_conclude calls for the same candidate don't re-run box drawing (SPEC.md §5:
     # "Cache the 5-1 and 5-2 results per candidate against the original image hash").
@@ -282,7 +282,7 @@ def build_zones_prompt(target_category: str) -> tuple:
     return prompt, ZONES_SCHEMA
 
 
-def zones(llm_client: LLMClient, boxed_image: np.ndarray, target_category: str, *, use_cache: bool = True) -> ZonesResult:
+def zones(llm_client: LLMClient, boxed_image: np.ndarray, target_category: str, *, use_cache: bool | None = None) -> ZonesResult:
     # boxed_image and the original are different images with different hashes and separate
     # prefix-cache entries (SPEC.md §5) -- but zone_gen itself is a pure function of the original
     # image + target (the box is drawn deterministically), so memoizing here on the boxed image's

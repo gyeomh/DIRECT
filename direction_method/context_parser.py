@@ -355,7 +355,7 @@ def _merge_other_objects_into_checklist(other_objects: list, model_checklist: di
     return merged
 
 
-def _call_and_parse(llm_client: LLMClient, description: str, *, use_cache: bool) -> tuple:
+def _call_and_parse(llm_client: LLMClient, description: str, *, use_cache: bool | None) -> tuple:
     prompt, schema = build_prompt(description)
     result = llm_client.call(prompt, image=None, response_schema=schema, use_cache=use_cache)
     try:
@@ -368,7 +368,9 @@ def _call_and_parse(llm_client: LLMClient, description: str, *, use_cache: bool)
 
 
 def parse_context(llm_client: LLMClient, description: str) -> ParsedContext:
-    target_category, target_phrase, other_objects, checklist = _call_and_parse(llm_client, description, use_cache=True)
+    # None = inherit the client's own caching setting, so a measurement run (VLM_USE_CACHE=0)
+    # actually queries the model here too. The retry below still forces False explicitly.
+    target_category, target_phrase, other_objects, checklist = _call_and_parse(llm_client, description, use_cache=None)
     problems = _validate(checklist)
     retried = False
 
