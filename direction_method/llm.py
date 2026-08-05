@@ -43,6 +43,26 @@ def image_hash(image) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+# Process-wide call accounting, aggregated across every LLMClient instance. Per-instance counters
+# are not enough for the official path: eval_model.py builds a fresh questioner (and therefore a
+# fresh LLMClient) per episode inside an exec'd script, so no caller outside it holds a reference
+# to aggregate. A driver reads these at the end to answer one question that is otherwise invisible
+# in the output: did this run actually compute anything, or replay a warm cache?
+CALL_STATS = {"hits": 0, "misses": 0, "by_model": {}}
+
+
+def reset_call_stats() -> None:
+    CALL_STATS["hits"] = 0
+    CALL_STATS["misses"] = 0
+    CALL_STATS["by_model"] = {}
+
+
+def _record_call(model_id: str, hit: bool) -> None:
+    CALL_STATS["hits" if hit else "misses"] += 1
+    per = CALL_STATS["by_model"].setdefault(model_id, {"hits": 0, "misses": 0})
+    per["hits" if hit else "misses"] += 1
+
+
 def _cache_key(model_id: str, prompt: str, img_hash: str | None) -> str:
     # Exactly sha256(model | prompt | image_hash) per SPEC.md §9 step 2 — deliberately no
     # temperature component (every call here runs at temperature=0.0; see VLLMBackend).
@@ -196,6 +216,13 @@ class LLMClient:
         self.model_id = model_id
         self.timeout_s = timeout_s
         self.time_required = 0.0
+        # Call accounting. A run served entirely from disk cache produces output identical to one
+        # that actually queried the model -- that indistinguishability is what let FakeVLM output
+        # pass as real in full_sweep_v1/v2, and what let a fully-cached replay pass as a fresh
+        # measurement later the same day. Counting hits vs. misses makes "did this run compute
+        # anything?" a number the caller can assert on instead of a thing nobody can see.
+        self.n_cache_hits = 0
+        self.n_cache_misses = 0
 
         # Default is relative ("artifacts/cache"), so it follows the process's cwd -- which is fine
         # for the drivers in scripts/ (they set cwd themselves) but wrong for anything run from the
@@ -267,8 +294,12 @@ class LLMClient:
         if use_cache:
             cached = self._load_cached(key)
             if cached is not None:
+                self.n_cache_hits += 1
+                _record_call(self.model_id, hit=True)
                 return cached
 
+        self.n_cache_misses += 1
+        _record_call(self.model_id, hit=False)
         start = time.monotonic()
         text = self._backend.generate(prompt, image, response_schema, self.timeout_s)
         latency = time.monotonic() - start

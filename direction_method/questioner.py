@@ -15,6 +15,7 @@ read. This class never stores `info` itself -- only the one field it actually ne
 at all, regardless of its name.
 """
 
+import os
 import sys
 import time
 from dataclasses import dataclass, field
@@ -35,6 +36,18 @@ from templates import question_for, region_for  # noqa: E402
 from zone_gen import ZoneGenError, locate, resolve_relations, zones  # noqa: E402
 
 FIRST_QUESTION_TEMPLATE = "Can you describe the {TARGET}'s location and visual appearance (e.g., color, shape, size)."
+
+# Default model for every module. Qwen3.6 replaced Qwen3-VL-30B-A3B-Instruct as the project default
+# on 2026-08-05: same MoE footprint class, and it won every single description type in the head-to-
+# head sweep (SPEC.md §13's model-swap section -- 711/1002 there, 759/1002 on the later v2 run, vs.
+# the old model's 612/1002). Two things travel with it and must not be dropped:
+#   - thinking has to be forced off per call (it defaults to emitting a reasoning block, and §8's
+#     ~60-70 calls/episode against a 600s budget has no room for one),
+#   - it needs vllm>=0.19.0; the old 0.15.0 pin does not know its architecture class.
+# Overridable by env for one-off comparisons without editing this file -- eval_model.py constructs
+# the questioner as `YourQuestioner(info)`, so env is the only channel available to that path.
+DEFAULT_MODEL_ID = os.environ.get("VLM_MODEL_ID", "Qwen/Qwen3.6-35B-A3B-FP8")
+DEFAULT_DISABLE_THINKING = os.environ.get("VLM_DISABLE_THINKING", "1") == "1"
 
 # ENV.md §3 -- the harness's own hard caps, shared across ALL candidates in an episode.
 ENV_MAX_STEPS = 60
@@ -92,12 +105,12 @@ class _CandidateState:
 
 
 class DirectionMethodQuestioner(QuestionerInterface):
-    def __init__(self, info, model_id: str = "Qwen/Qwen3-VL-30B-A3B-Instruct", llm_client=None):
+    def __init__(self, info, model_id: str = DEFAULT_MODEL_ID, llm_client=None):
         target_description = info["target_description"]
         # info is intentionally never stored (see module docstring / ENV.md §5) -- nothing below
         # this line reads `info` again.
 
-        self.llm_client = llm_client or LLMClient(model_id)
+        self.llm_client = llm_client or LLMClient(model_id, disable_thinking=DEFAULT_DISABLE_THINKING)
         parsed = parse_context(self.llm_client, target_description)
         self.context_parser_result = parsed  # full ParsedContext -- target_category/target_phrase/
         # other_objects/validation_problems/retried, for episode-level logging

@@ -103,6 +103,32 @@ def test_cache_write_is_atomic_no_leftover_tmp_files(tmp_path):
     assert tmp_files == []
 
 
+def test_call_stats_distinguish_a_cache_replay_from_a_real_run(tmp_path):
+    """A run served entirely from cache is otherwise indistinguishable from one that queried the
+    model -- the same blindness that let FakeVLM output pass as real in full_sweep_v1/v2, and a
+    warm-cache replay pass as a fresh measurement. CALL_STATS makes it assertable."""
+    from llm import CALL_STATS, reset_call_stats
+
+    reset_call_stats()
+    client = LLMClient("m", backend="fake", cache_dir=tmp_path)
+
+    client.call("prompt", IMG)
+    assert (CALL_STATS["hits"], CALL_STATS["misses"]) == (0, 1)  # cold: real query
+
+    client.call("prompt", IMG)
+    client.call("prompt", IMG)
+    assert (CALL_STATS["hits"], CALL_STATS["misses"]) == (2, 1)  # warm: pure replay
+    assert CALL_STATS["by_model"]["m"] == {"hits": 2, "misses": 1}
+
+    # A second client on the same directory sees the same entries -- aggregation is process-wide,
+    # which is what the official path needs (eval_model.py builds one questioner, and one
+    # LLMClient, per episode inside an exec'd script).
+    LLMClient("m", backend="fake", cache_dir=tmp_path).call("prompt", IMG)
+    assert (CALL_STATS["hits"], CALL_STATS["misses"]) == (3, 1)
+    reset_call_stats()
+    assert (CALL_STATS["hits"], CALL_STATS["misses"]) == (0, 0)
+
+
 def test_fake_backend_cache_is_namespaced_away_from_the_real_one(tmp_path):
     """Regression test for the contamination that produced full_sweep_v1/v2 (SPEC.md §13).
 

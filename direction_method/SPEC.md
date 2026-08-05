@@ -725,6 +725,15 @@ Pinning `vllm==0.19.0` specifically resolved `torch==2.10.0+cu128`, matching the
 working. **`vllm_env` is now on 0.19.0, not 0.15.0** — this is a shared environment change, not
 scoped to this experiment.
 
+**`ninja` must be installed in `vllm_env`.** Qwen3.6's gated-delta-rule attention is JIT-compiled
+by flashinfer on the **first real prefill**, and the compile shells out to `ninja`. Without it the
+engine dies there with `FileNotFoundError: [Errno 2] No such file or directory: 'ninja'` — *after*
+the API process is already up and answering `/v1/models` with 200. A sweep started against that
+server sees a healthy preflight, then runs for minutes against a dead engine, discarding every
+episode. `pip install ninja` into `vllm_env` fixes it; `run_official_eval.py`'s preflight now
+issues a real completion rather than trusting `/v1/models`, so this specific corpse cannot pass
+again.
+
 Thinking must be forced off per call (`chat_template_kwargs: {"enable_thinking": false}` in
 `extra_body`) — Qwen3.6 defaults to emitting a reasoning block, and the ~60–70 calls/episode budget
 (§8) has no room for it. Added as `LLMClient(..., disable_thinking=bool)` / `VLLMBackend`'s
@@ -767,11 +776,18 @@ gives `context_parser` almost nothing to get right or wrong either way. Not yet 
 and §5 already ran for the original model, rerun against this one, to separate them.
 
 Logs: `/data/gyeom/coin_challenge/direction_method_logs/full_sweep_qwen36/` (1002 runs, confirmed
-real, zero `"fake"` contamination). Not yet adopted as the default `MODEL_ID` anywhere — this is a
-comparison result, not a completed migration. Before switching the default: investigate the
-concurrency ceiling (§ above), and decide whether `SWEEP_WORKERS=3`'s ~3x longer wall clock (29.6
-min vs. 10.9 min for the same 1002 runs) is acceptable for the real 600s-per-episode budget, where
-each episode gets far less headroom than a controlled offline sweep.
+real, zero `"fake"` contamination), and `full_sweep_qwen36_v2/` — a later rerun at **759/1002
+(75.7%)**, same 942/60 terminated/discarded split.
+
+**[ADOPTED — 2026-08-05] This is now the project default**, not a comparison result.
+`questioner.py`'s `DEFAULT_MODEL_ID` holds it, and `DEFAULT_DISABLE_THINKING` carries the
+forced-off thinking that has to travel with it; both are env-overridable (`VLM_MODEL_ID`,
+`VLM_DISABLE_THINKING`) because `eval_model.py` constructs the questioner as `YourQuestioner(info)`
+and env is the only channel that path exposes. An earlier version of this paragraph said the
+opposite, and reading it cost a full 55-minute sweep on the superseded model.
+
+The concurrency ceiling above is still unexplained and still applies: do not raise
+`SWEEP_WORKERS` past 3. It does not affect `run_official_eval.py`, which is strictly serial.
 
 ---
 
