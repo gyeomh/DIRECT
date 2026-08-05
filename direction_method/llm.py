@@ -187,19 +187,36 @@ class LLMClient:
         model_id: str,
         *,
         backend: str | None = None,
-        cache_dir: str | Path = "artifacts/cache",
+        cache_dir: str | Path | None = None,
         timeout_s: float = 20.0,
         port: int | None = None,
         temperature: float = 0.0,
         disable_thinking: bool = False,
     ):
         self.model_id = model_id
-        self.cache_dir = Path(cache_dir)
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.timeout_s = timeout_s
         self.time_required = 0.0
 
+        # Default is relative ("artifacts/cache"), so it follows the process's cwd -- which is fine
+        # for the drivers in scripts/ (they set cwd themselves) but wrong for anything run from the
+        # repo root, where it silently starts a second, cold cache instead of reusing the populated
+        # one. VLM_CACHE_DIR pins it explicitly, same override pattern as VLM_BACKEND/VLM_PORT, and
+        # matters most for callers that cannot pass cache_dir at all -- eval_model.py constructs
+        # the questioner as `YourQuestioner(info)`, with no argument to thread it through.
+        if cache_dir is None:
+            cache_dir = os.environ.get("VLM_CACHE_DIR", "artifacts/cache")
+
         self.backend_name = backend or os.environ.get("VLM_BACKEND", "vllm")
+        # FakeVLM results live in their own namespace, never alongside real ones. The cache key is
+        # sha256(model | prompt | image_hash) with no backend component, so on a shared directory a
+        # "fake" entry is indistinguishable from a real one to every later run -- which is exactly
+        # how full_sweep_v1/v2 came out as placeholder data (SPEC.md §13's correction): an earlier
+        # VLM_BACKEND=fake dry run seeded the shared cache, and every subsequent "real" run
+        # replayed it. Separating the directory makes that collision structurally impossible while
+        # leaving real cache keys (and the expensive entries already written under them) untouched.
+        self.cache_dir = Path(cache_dir) / "_fake" if self.backend_name == "fake" else Path(cache_dir)
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+
         if self.backend_name == "fake":
             self._backend = FakeVLMBackend()
         else:
