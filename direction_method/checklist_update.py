@@ -1,6 +1,16 @@
 """checklist_update (SPEC.md §12): the last of the four modules. current checklist + new
 (relation, answer) pairs from one candidate image -> updated checklist.
 
+[CORRECTED -- 2026-08-05] The 51.5% figure below traced back to full_sweep_v1, which was
+FakeVLMBackend placeholder output, not real model output -- root cause and full writeup in
+SPEC.md SS13. That number described the OLD (now-removed) LLM-classification design, which no
+longer exists to re-measure -- there is nothing left to misfile a key, by construction, since
+`relation` is now taken directly from the code, never asked of a model. A real rerun
+(full_sweep_real, 2026-08-05, empty cache, real vllm backend, 1002/1002 runs, 612/1002 full
+success) confirms zero "fake" contamination in this design's output, but doesn't re-derive a
+misfile rate -- there's no comparable statistic anymore, the design eliminated the failure mode
+rather than reducing its rate.
+
 No LLM call. Confirmed against the real full 167-episode x 6-description-type sweep: the
 previous LLM-driven design (ask the model to extract assertions from each answer AND choose
 which of the 11 checklist keys to file them under) misfiled content under the wrong key in 51.5%

@@ -109,20 +109,29 @@ class VLLMBackend:
     "ignored" warning, valid JSON on both short and long prompts) and is what's used below.
     """
 
-    def __init__(self, model_id: str, *, port: int = 8000, temperature: float = 0.0):
+    def __init__(self, model_id: str, *, port: int = 8000, temperature: float = 0.0, disable_thinking: bool = False):
         self.model_id = model_id
         self.temperature = temperature
+        self.disable_thinking = disable_thinking
         self._client = ClientBasedLLM(model_id=model_id, temperature=temperature, port=port)
 
     def generate(self, prompt: str, image, response_schema: dict | None, timeout_s: float) -> str:
         kwargs = {"timeout": timeout_s}
+        extra_body = {}
         if response_schema is not None:
-            kwargs["extra_body"] = {
-                "response_format": {
-                    "type": "json_schema",
-                    "json_schema": {"name": "response", "schema": response_schema, "strict": True},
-                }
+            extra_body["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {"name": "response", "schema": response_schema, "strict": True},
             }
+        if self.disable_thinking:
+            # Thinking-capable models (e.g. Qwen3.6) default to emitting a reasoning block per
+            # call; every module here is designed around Instruct-style single-shot output
+            # (SPEC.md's Instruct-not-Thinking choice), and ~60-70 calls/episode against a 600s
+            # budget doesn't have room for reasoning tokens on every call. No-op for models whose
+            # chat template has no enable_thinking branch (e.g. Qwen3-VL-Instruct).
+            extra_body["chat_template_kwargs"] = {"enable_thinking": False}
+        if extra_body:
+            kwargs["extra_body"] = extra_body
         return self._client.ask(prompt=prompt, images=[image] if image is not None else None, **kwargs)
 
     def stream_with_ttft(self, prompt: str, image, response_schema: dict | None):
@@ -182,6 +191,7 @@ class LLMClient:
         timeout_s: float = 20.0,
         port: int | None = None,
         temperature: float = 0.0,
+        disable_thinking: bool = False,
     ):
         self.model_id = model_id
         self.cache_dir = Path(cache_dir)
@@ -197,7 +207,7 @@ class LLMClient:
             # an unrelated process on a shared machine) without editing every script that
             # constructs LLMClient() without an explicit port -- same override pattern as VLM_BACKEND.
             resolved_port = port if port is not None else int(os.environ.get("VLM_PORT", 8000))
-            self._backend = VLLMBackend(model_id, port=resolved_port, temperature=temperature)
+            self._backend = VLLMBackend(model_id, port=resolved_port, temperature=temperature, disable_thinking=disable_thinking)
 
     def _cache_path(self, key: str) -> Path:
         return self.cache_dir / f"{key}.json"

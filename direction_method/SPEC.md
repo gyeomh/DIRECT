@@ -25,7 +25,8 @@ modules — not counted as a fifth module, since they make no VLM call of their 
 
 ## 2. Checklist
 
-Two-level structure. Parent node = relation key. Children = **atomic** assertions.
+Two-level structure. Parent node = relation key. Children are region-stripped assertions (§ below)
+— for `Target` specifically, no longer required to be atomic (see the reversal noted below).
 
 ```
 Target:
@@ -45,10 +46,18 @@ tiles on a black wall", just "wooden tiles hung on a black wall"; not "The cabin
 This guarantees the checklist path and the oracle-answer path produce identical region strings
 for the same relation, since both go through the same `region_for` call.
 
-**Atomic decomposition is required** regardless of this change. `self_check` verifies assertions
-one at a time, so a compound assertion ("navy blue with multiple items on it") makes the verdict
-ambiguous when one clause holds and the other is occluded. Split at parse time (`context_parser`)
-and at update time (`checklist_update`).
+**[REVERSED — 2026-08-05] Atomic decomposition is no longer done at parse time.** The original
+argument still holds in principle — `self_check` verifies one assertion per call, so a compound
+assertion can be ambiguous when one clause holds and the other is occluded — but real-world
+evidence outweighed it: `context_parser`'s own atomic-split Target attributes (e.g. "it is
+mirrored" / "it is silver" as two children) routinely lost the connection between a shape/material
+word and the color that applied to it, and `checklist_update`'s dominant failure mode in real
+sweeps (§13) is `self_check` false-rejecting genuine matches, not ambiguity from occlusion.
+`checklist_update` already went non-atomic (§12, verbatim oracle answers, no split — this was
+never reversed). `context_parser`'s RULE 1 now matches: one combined assertion per target,
+attributes kept together as written in the description, not split into separate children. Kept
+region-stripped (children still don't restate the region string) — that part of this section is
+unaffected, only the atomic-splitting requirement is reversed.
 
 Assertion style, not fragments — each child must be a standalone claim that can be checked against
 an image on its own, once paired with its region.
@@ -192,12 +201,16 @@ addition to the prompt's own stated limit.
    legitimate and means "conclude match" — it must never trigger the fallback; the fallback is only
    for an empty VLM response, not for an empty post-checklist-dedup result.
 
-**Geometry cross-check is logging only.** If the box touches an image edge (per the same
-`[0, 1000]`-frame margin check used for the fallback) and the VLM still returned the direction on
-that side, record it but keep the region — box placement may be slightly off, and whether to start
-filtering these is a decision for later, from the logged frequency.
+**[HARD FILTER — 2026-08-05] Geometry cross-check was logging-only; now filters.** If the box
+touches an image edge (per the same `[0, 1000]`-frame margin check used for the fallback) and the
+VLM still returned the direction on that side, drop it rather than keep it. The logged frequency
+this was deferred pending (6/25, 24%, on the first verification pass, §13) kept recurring in
+production runs and was directly observed producing an unanswerable question ("below the table"
+with no room below), so the "decision for later" is made: filtered, not merely logged.
+`edge_touch_log` still records what was filtered, unchanged, for continued monitoring — only the
+`relations` output changed.
 
-**Config:** `MAX_REGIONS = 5`.
+**Config:** `MAX_REGIONS = 4`.
 
 **Caching.** The boxed image and the original are different images with different hashes and
 separate prefix-cache entries. Both the 5-1 and the 5-2 result are cached per candidate against the
@@ -315,17 +328,21 @@ the same relation:
   rules handle that). Deterministic string assembly, no VLM call. The mandatory first/target
   question uses the sentinel `relation = "Target"`.
 - **Checklist item** → `region = region_for(parent_key, target_phrase)`, `assertion` = the stored
-  child text — already atomic, already region-stripped (§2).
+  child text — region-stripped (§2); for `Target`, no longer required to be atomic (§2's reversal).
 
 **Prompt text:** kept verbatim in `self_check.py` (`SELF_CHECK_PROMPT`), not duplicated here so
-the two can never drift. It defines the core rule (contradiction requires positive evidence),
-nine "not a contradiction" cases (incompleteness, naming variance, color-family variance,
-approximate position, multiple objects per region, vague quantities, occlusion/cropping, hedged
-wording, speaker framing), and five "is a contradiction" cases (wrong attribute when clearly
-visible, wrong object type, region visibly empty, wrong scene type, region claimed empty but is
-not — this last one added to close the reverse-empty gap that "region visibly empty" doesn't
-cover: an assertion claiming a region is empty when it plainly is not). Do not paraphrase, shorten,
-or trim that text when touching this module — the specificity is deliberate.
+the two can never drift. It defines the core rule (contradiction requires positive evidence), ten
+"not a contradiction" cases (incompleteness, naming variance, color-family variance, approximate
+position, multiple objects per region, vague quantities, occlusion/cropping, hedged wording,
+speaker framing, and — added 2026-08-05 — related object/similar shape with matching color, e.g.
+a music-note claim against a music-sheet image, or "shelf" against a bookshelf, judged aligned
+when shape and color both hold even if the exact object noun differs), and five "is a
+contradiction" cases (wrong attribute when clearly visible, wrong object type — now explicitly
+deferring to the related-object case above when it applies, region visibly empty, wrong scene
+type, region claimed empty but is not — this last one added to close the reverse-empty gap that
+"region visibly empty" doesn't cover: an assertion claiming a region is empty when it plainly is
+not). Do not paraphrase, shorten, or trim that text when touching this module — the specificity is
+deliberate.
 
 **Prompt layout:** `[image] → [fixed system prompt] → [variable region/assertion]`. The image and
 the entire fixed system-prompt text never change between calls; only the region/assertion suffix
@@ -504,9 +521,25 @@ descriptions crashed this way before the cap was added).
 
 - Logprob tie-break and follow-up question construction (§7) — deferred.
 - `max_pixels` value.
-- Whether the edge-touch leak logged by `zone_gen`'s geometry cross-check (§5-2) is frequent enough
-  to warrant filtering — decide from the logged frequency once more real numbers exist (6/25 in
-  the first real sample; see the real-server section below).
+- **Resolved, 2026-08-05.** The edge-touch leak logged by `zone_gen`'s geometry cross-check (§5-2)
+  went from logging-only to a hard filter — real production runs kept recurring at the ~24% rate
+  the first sample found, including a directly observed case asking about a region ("below") that
+  provably had no image content. `edge_touch_log` still records what got filtered, for continued
+  monitoring.
+- **Resolved, 2026-08-05.** `context_parser`'s depth cues (`"in front of"`, `"behind"`) had no
+  worked example and the model guessed a 2D screen direction for them — confirmed producing
+  `key="below"` for a window actually behind the target, poisoning the whole episode's checklist
+  with an unsatisfiable assertion. Depth cues now map to `"next to"` (§10 REGION KEYS), the same
+  escape hatch already used for "no side given" — this project's region keys are 2D-screen-only,
+  so depth has no honest directional answer among them.
+- **Resolved, 2026-08-05.** Left/right handedness was never made explicit across modules —
+  `context_parser`, `zone_gen`, and `self_check` each independently describe directional keys, and
+  nothing stated whether "right" means screen-right (viewer's right, looking at the photo) or the
+  target object's own right as if it were a person facing the camera (which would be the mirror
+  image of screen-right). All three prompts now state the same convention explicitly:
+  screen-relative, never mirrored. `zone_gen`'s wording was already screen-relative by construction
+  ("that side of the red box, as the image is viewed") but said so implicitly; it's explicit now
+  too, so a future edit to any one module can't silently drift from the other two.
 - **Resolved.** `context_parser`'s relation-vs-`Target` filing problem (§10): the `other_objects`
   field alone (prompt-level fix) cut nothing on its own — confirmed at 6 types × 30 episodes, 35%
   overall flag rate, 90%+ on the two richest description types. Moving checklist's non-`Target`
@@ -603,21 +636,57 @@ port 8002 — 8000/8001 were already in use by unrelated processes on this share
   first call TTFT 0.47s, second (same image, different suffix) TTFT 0.11s, about 4x faster,
   consistent with the image's KV cache being reused.
 
+**[CORRECTED — 2026-08-05] `full_sweep_v1`/`full_sweep_v2` were FakeVLM output; rerun as
+`full_sweep_real` with real numbers below.** Both old logs, on inspection, contained literal
+`"fake"` placeholder strings in every VLM-generated field — `FakeVLMBackend`'s canned output
+(`llm.py`), not real model output. Root cause, confirmed: `LLMClient`'s disk cache key
+(`llm.py:_cache_key`, `sha256(model_id | prompt | image_hash)`) does not include which backend
+produced the response. `context_parser` calls carry no image (`image_hash=None`), so its cache key
+is a pure function of the prompt text — meaning it collides across *any* two runs that ask about
+the same description, real or fake. An earlier `VLM_BACKEND=fake` dry run (`run_full_loop_dry_run.py`,
+documented elsewhere in this file as covering all 167 episodes) had already populated the shared
+`artifacts/cache/` with a fake entry for every description in the training set, so every later
+"real" sweep silently cache-hit those entries for every `context_parser` call regardless of the
+backend actually configured — confirmed by reproducing it live: a fresh real-backend run against
+the poisoned cache came back with `context_parser` still `"fake"` while `zone_gen`/`self_check`
+(image-bearing, different hash) came back real. **Fix applied:** the poisoned cache directory was
+moved aside (`artifacts/cache_contaminated_backup_<timestamp>/`, not deleted) and the sweep rerun
+against an empty cache. Still open: the cache key itself should probably include the backend name
+so this can't silently recur — not yet done, flagged here rather than fixed, since it changes the
+cache format (SPEC.md §9's own key formula) and needs its own decision.
+
 **Full real-VLM sweep (`scripts/run_full_sweep.py`): all 167 episodes × all 6 description types,
-1002 episode-runs, port 8002.** ThreadPoolExecutor (12 workers), one fresh `LLMClient` + `QAEnv`
-per task, resumable (a task whose output JSON already exists is skipped). Rich per-run JSON logs
-(`context_parser` result, checklist before/after per candidate, every `self_check` interaction
+1002 episode-runs, port 8002, GPU 2.** ThreadPoolExecutor (12 workers), one fresh `LLMClient` +
+`QAEnv` per task, resumable (a task whose output JSON already exists is skipped). Rich per-run JSON
+logs (`context_parser` result, checklist before/after per candidate, every `self_check` interaction
 with region/assertion-or-question/answer/evidence/verdict, `zone_gen` bbox/scene/zone_list,
-resolved image paths) saved to `/data/gyeom/coin_challenge/direction_method_logs/full_sweep_v1/`,
-browsable via `scripts/serve_viewer.py` (a local zero-dependency stdlib HTTP server + single-page
-viewer at `viewer/index.html`).
+resolved image paths) saved to `/data/gyeom/coin_challenge/direction_method_logs/full_sweep_real/`
+(confirmed zero `"fake"` strings across all 1002 records), browsable via `scripts/serve_viewer.py`
+(default `LOG_ROOT` now points here) — a local zero-dependency stdlib HTTP server + single-page
+viewer at `viewer/index.html`.
 
-Final result after the fixes below: **1002/1002 runs completed, zero crashes, zero invalid
-actions** (944 `terminated`, 58 `discarded_env_bug` per ENV.md §6 bug 3). Full-success rate
-519/1002 (51.8%), fairly even across description types (45.5%–55.7%; `category`-only lowest, as
-expected — least disambiguating information).
+**Real result (2026-08-05, empty cache, real vllm backend): 1002/1002 runs completed in 10.9
+minutes, zero crashes, zero invalid actions** (944 `terminated`, 58 `discarded_env_bug` per
+ENV.md §6 bug 3 — same magnitude as the old, untrustworthy 58-count, so that particular number
+happens to hold up). **Full-success rate 612/1002 (61.1%)**, per-type:
 
-Two real bugs surfaced by running at this scale (both fixed, both with regression tests):
+| type | full success |
+|---|---|
+| category | 64.1% |
+| color | 63.5% |
+| color_feature | 62.9% |
+| color_context | 61.7% |
+| context | 60.5% |
+| color_context_feature | 53.9% |
+
+(Supersedes the old 45.5%–55.7% fake-run spread. `category` is now the *highest*, not the lowest,
+of the six — see the Qwen3.6 comparison below for the same inversion and a hypothesis why.)
+
+The two "real bugs" below are **historical** — both fixes (thread-id in the tmp-file suffix,
+`maxLength` on every string field) are already applied in the current code regardless of whether
+the original discovery narrative is trustworthy, so nothing to redo here. The discovery story
+itself (specific crash counts, "reproduced 6/9 identically") is unconfirmed by the same fake-data
+concern as everything else in this subsection before the correction above:
 
 - **`LLMClient._store_cache`'s tmp-file suffix was keyed on `os.getpid()` alone**, which every
   thread in one process shares. Two threads racing on the same cache key (identical prompt+image
@@ -640,7 +709,81 @@ Two real bugs surfaced by running at this scale (both fixed, both with regressio
 
 ---
 
+### Model swap experiment: Qwen3.6-35B-A3B-FP8 (2026-08-05)
+
+Tried as a straight drop-in replacement for `Qwen/Qwen3-VL-30B-A3B-Instruct` across all four
+modules, same prompts, same schemas, same GPU (2), same 8192 `max-model-len`. Motivation: Qwen3.6
+is Alibaba's successor line, same MoE footprint class (35B total / 3B active vs. the old model's
+30B/3B), reported ahead of Qwen3-VL on general vision-language benchmarks.
+
+**Environment.** `vllm==0.15.0` (this project's pin) does not know the model's architecture
+(`Qwen3_5MoeForConditionalGeneration` — Qwen3.6 reuses the 3.5 architecture class name). Required
+`vllm>=0.19.0`. Upgrading pulled `torch` built for CUDA 13 by default (`pip install -U vllm`, no
+version pin), which `torch.cuda.is_available()` reports `False` against this machine's driver
+(12.8) — the exact failure mode `HANDOFF.md` §2 already documented once for the original model.
+Pinning `vllm==0.19.0` specifically resolved `torch==2.10.0+cu128`, matching the driver; confirmed
+working. **`vllm_env` is now on 0.19.0, not 0.15.0** — this is a shared environment change, not
+scoped to this experiment.
+
+Thinking must be forced off per call (`chat_template_kwargs: {"enable_thinking": false}` in
+`extra_body`) — Qwen3.6 defaults to emitting a reasoning block, and the ~60–70 calls/episode budget
+(§8) has no room for it. Added as `LLMClient(..., disable_thinking=bool)` / `VLLMBackend`'s
+`extra_body`, no-op for Instruct-only models like Qwen3-VL. `run_full_sweep.py` gained
+`SWEEP_MODEL_ID` / `SWEEP_DISABLE_THINKING` env overrides so this didn't require editing the
+script per run.
+
+**Stability, not just capability, is a real cost of the swap.** At the original concurrency
+(`SWEEP_WORKERS=12`), the run degraded partway through: `httpcore.ReadTimeout` at almost exactly
+the client's own timeout ceiling (60.1s, then 90.x s after raising it), for the *majority* of
+subsequent runs, GPU pinned at 100%/~75GB throughout. Killing the client script did **not** release
+the GPU — `nvidia-smi` stayed at 100% until the server process itself was `kill -9`'d, meaning a
+stuck/runaway generation was holding a scheduler slot server-side, not a client-side queueing
+artifact. Dropping to `SWEEP_WORKERS=6` reproduced the same pattern at a similar point in the run.
+**`SWEEP_WORKERS=3` (down from 12) completed cleanly**, 1002/1002, zero crashes, confirmed zero
+`"fake"` cache contamination. Root cause of the hang not isolated — flagged here as a known
+concurrency ceiling for this model/vllm-version combination, not fixed. Do not raise
+`SWEEP_WORKERS` above 3 for this model without re-investigating.
+
+**Result: 711/1002 (71.0%) full success, vs. baseline 612/1002 (61.1%) — +9.9 points, same 1002
+episode-runs, same prompts/schemas.** 942 `terminated` / 60 `discarded_env_bug` (same magnitude as
+baseline's 58 — harness-level, model-independent, as expected). Per type, Qwen3.6 ahead in every
+single one:
+
+| type | Qwen3.6-35B-A3B | Qwen3-VL-30B-A3B (baseline) | delta |
+|---|---|---|---|
+| category | 82.0% | 64.1% | +18.0 |
+| context | 73.7% | 60.5% | +13.2 |
+| color_context_feature | 64.7% | 53.9% | +10.8 |
+| color_context | 68.9% | 61.7% | +7.2 |
+| color_feature | 68.3% | 62.9% | +5.4 |
+| color | 68.3% | 63.5% | +4.8 |
+
+**`category` shows the largest gain, on both models the type with the least description content
+to work from** — the gap tracks visual grounding/reasoning quality (`zone_gen`, `self_check`
+reading the actual candidate pixels), not description parsing, since a category-only description
+gives `context_parser` almost nothing to get right or wrong either way. Not yet isolated by module
+— could be `self_check` producing fewer false-`"no"`s (§7's own false-negative concern), could be
+`zone_gen` grounding/box quality, most likely both; would need the same per-module experiments §7
+and §5 already ran for the original model, rerun against this one, to separate them.
+
+Logs: `/data/gyeom/coin_challenge/direction_method_logs/full_sweep_qwen36/` (1002 runs, confirmed
+real, zero `"fake"` contamination). Not yet adopted as the default `MODEL_ID` anywhere — this is a
+comparison result, not a completed migration. Before switching the default: investigate the
+concurrency ceiling (§ above), and decide whether `SWEEP_WORKERS=3`'s ~3x longer wall clock (29.6
+min vs. 10.9 min for the same 1002 runs) is acceptable for the real 600s-per-episode budget, where
+each episode gets far less headroom than a controlled offline sweep.
+
+---
+
 ## 12. checklist_update
+
+**[CORRECTED — 2026-08-05] The 51.5% figure below came from `full_sweep_v1`, which was
+`FakeVLMBackend` placeholder output, not real model output — root cause (a cache-key collision,
+not a stray env var) written up in SPEC.md §13. It described the OLD LLM-classification design,
+which this section already replaced; there's no equivalent number to re-derive against the current
+no-LLM design, since a model no longer classifies anything for this to mismeasure. `full_sweep_real`
+(2026-08-05, empty cache, real backend, 1002/1002 runs) confirms this design's output is real
+(zero `"fake"` contamination) but doesn't produce a comparable misfile rate.
 
 **No LLM call.** Originally a text-only VLM call (extract assertions from each new oracle answer,
 choose which of the 11 checklist keys to file them under, one call per candidate-image judgement).
@@ -686,7 +829,8 @@ checklist. Accepted deliberately — the 51.5% key-misfiling this replaces was a
 to-detect problem (silently breaks relation dedup and inflates question counts) than an
 occasionally verbose assertion, which `self_check` still has to judge correctly either way.
 
-**`full_sweep_v1`'s existing logs predate this fix** and should be treated as stale for any
+**`full_sweep_v1`'s existing logs predate this fix, AND are separately confirmed to be `FakeVLM`
+output (§13)** — treated as stale for any
 question involving non-`Target` checklist content or relation-question counts — the sweep has not
 yet been rerun with the corrected `checklist_update`.
 
