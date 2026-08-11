@@ -272,6 +272,43 @@ def test_resolve_relations_filters_all_edge_touching_keys_to_empty():
     assert set(out.edge_touch_log) == {"left", "below"}
 
 
+@pytest.mark.parametrize(
+    "episode,bbox,too_thin",
+    [
+        # real locate() output from the 2026-08-11 25-image verification pass; each of these had a
+        # direction selected with only a few frame-units of room on that side.
+        ("7c754d7d", (203, 0, 835, 997), "below"),   # 3 units below
+        ("c0622d58", (0, 646, 967, 997), "below"),   # 3 units below
+        ("162a896c", (68, 753, 997, 998), "below"),  # 2 units below
+        ("f9140bf5", (362, 273, 580, 963), "below"), # 37 units below
+        ("861d2297", (172, 1, 998, 835), "right"),   # 2 units right
+    ],
+)
+def test_directions_with_no_usable_room_are_filtered(episode, bbox, too_thin):
+    """A strip a few frame-units wide holds nothing describable, but the old eps=1 threshold only
+    caught boxes flush against the frame. `below` was the worst relation in the same run's official
+    logs (19 false-"no"s on the true match vs 1 distractor rejection).
+    """
+    zr = _zr([too_thin])
+    out = resolve_relations(zr, bbox_2d=bbox, existing_parent_keys=set())
+    assert too_thin not in out.relations, f"{episode}: {too_thin} should be filtered for {bbox}"
+    assert too_thin in out.edge_touch_log
+
+
+def test_direction_with_ample_room_is_kept():
+    # the other side of the threshold -- a real box with plenty of room must survive
+    zr = _zr(["below", "left", "right"])
+    out = resolve_relations(zr, bbox_2d=(335, 538, 672, 753), existing_parent_keys=set())
+    assert set(out.relations) == {"below", "left", "right"}
+    assert out.edge_touch_log == []
+
+
+def test_edge_threshold_is_a_usable_strip_not_pixel_contact():
+    # guards the constant itself: a 1-unit threshold is what let the above cases through.
+    from zone_gen import _EDGE_EPS, _EDGE_FRAME
+    assert _EDGE_EPS >= 0.02 * _EDGE_FRAME
+
+
 def test_edge_touch_log_ignores_on_key():
     # "on" isn't a directional/edge-relative key -- must never appear in the edge-touch log
     zr = _zr(["on"])

@@ -97,6 +97,7 @@ Relations are from the TARGET's point of view: describe where the OTHER object
 sits relative to the target. Reverse the description's wording when needed:
   "cabinet UNDER a countertop"  -> the countertop is ABOVE the cabinet -> "above"
   "bed BESIDE a nightstand"     -> no side given                       -> "next to"
+  "vase ON a wooden cabinet"    -> the cabinet is BELOW the vase       -> "below"
 
 "left"/"right" (and the four corner keys) are always screen-left/screen-right as
 the photo is viewed -- the same convention a person points with while looking at
@@ -113,6 +114,32 @@ cues, rather than guessing a screen direction:
 
 Use "next to" only when the description gives no side, including for the DEPTH
 case above.
+
+=== "ON" HAS TWO DIRECTIONS -- ASK WHICH OBJECT IS HOLDING THE OTHER ===
+
+The region key "on" means ONE thing: the other object rests on the TARGET's own
+top surface. It never means the target rests on something else.
+
+So the word "on" in a description does not pick the key. Ask which of the two
+objects is holding the other up:
+
+  the OTHER object rests on the target -> "on"
+    "bed with a blue blanket"        the blanket sits on the bed      -> "on"
+    "table with books on it"         the books sit on the table       -> "on"
+
+  the TARGET rests on the other object -> "below"
+    "vase on a wooden cabinet"       the cabinet holds up the vase    -> "below"
+    "armchair on a red rug"          the rug is under the armchair    -> "below"
+    "blanket on a bed"               the bed holds up the blanket     -> "below"
+
+  the target is MOUNTED on a wall or other vertical surface -> "next to"
+    A wall behind the target is neither above nor below it -- the same depth
+    problem as "behind"/"in front of", so it takes the same escape hatch.
+    "clock hanging on a beige wall"  the wall is behind the clock     -> "next to"
+    "grab bar on the tiled wall"     the wall is behind the bar       -> "next to"
+
+Note how the same object flips key with the roles: a blanket is "on" when the bed
+is the target, and the bed is "below" when the blanket is the target.
 
 === PARTS vs SEPARATE OBJECTS ===
 
@@ -223,7 +250,25 @@ or the target — those are added later from the region key.
  "target_phrase": "gray couch",
  "other_objects": [{"object": "pillows", "cue": "with", "key": "on"},
                     {"object": "three framed artworks", "cue": "under", "key": "above"}],
- "checklist": {"Target": ["it is gray"]}}"""
+ "checklist": {"Target": ["it is gray"]}}
+
+"Terracotta vase on a wooden cabinet"
+{"target_category": "vase",
+ "target_phrase": "terracotta vase",
+ "other_objects": [{"object": "a wooden cabinet", "cue": "on", "key": "below"}],
+ "checklist": {"Target": ["it is terracotta"]}}
+
+"Green armchair on a large red rug"
+{"target_category": "armchair",
+ "target_phrase": "green armchair",
+ "other_objects": [{"object": "a large red rug", "cue": "on", "key": "below"}],
+ "checklist": {"Target": ["it is green"]}}
+
+"Black clock hanging on a beige wall"
+{"target_category": "clock",
+ "target_phrase": "black clock",
+ "other_objects": [{"object": "a beige wall", "cue": "hanging on", "key": "next to"}],
+ "checklist": {"Target": ["it is black"]}}"""
 
 # maxItems=8 on both arrays below: confirmed against a live vllm==0.15.0 server that without it,
 # the model can enter a token-repetition loop (the same assertion string appended dozens of
@@ -320,10 +365,48 @@ def _target_assertions_with_spatial_words(checklist: dict) -> list:
     return hits
 
 
-def _validate(checklist: dict) -> list:
+def _support_surfaces_misfiled_under_on(description: str, other_objects: list) -> list:
+    """Detects the §11 failure mode: the description says the TARGET rests on X, and X was filed
+    under `on` -- which `templates.region_for` renders as "on top of the {target}", i.e. the
+    target's own top surface. `"Terracotta vase on a wooden cabinet"` then asks for a wooden cabinet
+    on top of the vase, which no photo can satisfy, and because it lands in the INITIAL checklist it
+    fails every candidate in the episode including the real match. Measured on
+    `full_sweep_qwen36_v2`: 26 of 41 runs whose description has a "target on X" phrase filed X under
+    `on`, and 17 of those failed.
+
+    The test is precise because of how these descriptions are built: the target is the head noun the
+    description opens with, so a literal "on <X>" phrase attaches to the target and says the target
+    rests on X. X therefore belongs under `below` (a support surface) or `next to` (a wall the target
+    is mounted on) -- never `on`. The inverse wording, which IS `on`, never produces this phrase:
+    "bed with a blue blanket" and "table with books on it" contain no "on <the other object>".
+
+    Detection only, never reclassification -- same policy as the spatial-word check above.
+    """
+    hits = []
+    lowered = " ".join(description.lower().split())
+    for obj in other_objects:
+        if not isinstance(obj, dict) or obj.get("key") != "on":
+            continue
+        noun = " ".join(str(obj.get("object", "")).lower().split())
+        noun = re.sub(r"^(?:a|an|the)\s+", "", noun)
+        if not noun:
+            continue
+        if re.search(rf"\bon\s+(?:a|an|the)?\s*{re.escape(noun)}", lowered):
+            hits.append(obj["object"])
+    return hits
+
+
+def _validate(checklist: dict, description: str = "", other_objects: list | None = None) -> list:
+    """`description`/`other_objects` are optional so the older single-argument call in
+    scripts/run_atomicity_experiment.py keeps working -- it only exercises the spatial-word check."""
     problems = []
     for assertion, word in _target_assertions_with_spatial_words(checklist):
         problems.append(f"Target assertion {assertion!r} contains spatial word {word!r}")
+    for object_text in _support_surfaces_misfiled_under_on(description, other_objects or []):
+        problems.append(
+            f"other_objects entry {object_text!r} filed under 'on', but the description says the "
+            f"target rests on it -- belongs under 'below' (or 'next to' if it is a wall)"
+        )
     return problems
 
 
@@ -371,7 +454,7 @@ def parse_context(llm_client: LLMClient, description: str) -> ParsedContext:
     # None = inherit the client's own caching setting, so a measurement run (VLM_USE_CACHE=0)
     # actually queries the model here too. The retry below still forces False explicitly.
     target_category, target_phrase, other_objects, checklist = _call_and_parse(llm_client, description, use_cache=None)
-    problems = _validate(checklist)
+    problems = _validate(checklist, description, other_objects)
     retried = False
 
     if problems:
@@ -380,7 +463,7 @@ def parse_context(llm_client: LLMClient, description: str) -> ParsedContext:
         # serving-time nondeterminism rather than a guaranteed fix, not a reclassification step.
         retried = True
         target_category, target_phrase, other_objects, checklist = _call_and_parse(llm_client, description, use_cache=False)
-        problems = _validate(checklist)
+        problems = _validate(checklist, description, other_objects)
         if problems:
             print(f"[WARN] context_parser: validation still failing after retry for description={description!r}: {problems}")
 
