@@ -30,7 +30,16 @@ REGION_KEYS = [
 # frame the model actually used. Verify on the first 20-30 images tomorrow (scripts/verify_zone_gen.py)
 # and correct _bbox_to_pixels / _EDGE_FRAME below if the real convention differs.
 _EDGE_FRAME = 1000
-_EDGE_EPS = 1  # touching an edge means within this many frame-units of 0 or _EDGE_FRAME
+# "Touching an edge" is a proxy for "there is no room on that side to hold a describable object",
+# so the threshold has to be a usable strip width, not literal pixel contact. It was 1 (0.1% of the
+# frame), which only caught exact flush boxes: measured on 25 real images (2026-08-11), 8 of the 77
+# directions zone_gen selected had under 5% margin -- boxes with 2, 3, and 5 frame-units of room
+# still had `below`/`right` selected and a live question asked about a strip a few pixels tall.
+# That matches `below` being the worst relation by usefulness in the same run's official logs: 19
+# false-`"no"`s on the true match against a single distractor rejection, i.e. it almost only ever
+# cost episodes. 50 = 5% of the frame; a strip thinner than that cannot hold an object the model
+# can describe at the resolution it sees.
+_EDGE_EPS = 50
 
 
 class ZoneGenError(Exception):

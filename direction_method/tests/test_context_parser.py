@@ -12,6 +12,7 @@ from context_parser import (
     ContextParserError,
     ParsedContext,
     _merge_other_objects_into_checklist,
+    _support_surfaces_misfiled_under_on,
     _target_assertions_with_spatial_words,
     _validate,
     build_prompt,
@@ -152,6 +153,82 @@ def test_validate_flags_spatial_words_in_target():
 
 def test_validate_clean_checklist_has_no_problems():
     assert _validate({"Target": ["it is white"], "above": ["a mirror"]}) == []
+
+
+# --- validator: support surface misfiled under "on" (SPEC.md §11) -----------------------------
+
+
+@pytest.mark.parametrize(
+    "description,object_text",
+    [
+        # the exact shapes measured on full_sweep_qwen36_v2 (26/41 misfiled, 17 of those failed)
+        ("Terracotta vase on a wooden cabinet", "a wooden cabinet"),
+        ("Green armchair on a large red rug", "a large red rug"),
+        ("Blue blanket on a bed", "a bed"),
+        # mounting surface -- wants "next to", still wrong under "on"
+        ("Black clock hanging on a beige wall", "a beige wall"),
+        ("Grab bar on the tiled wall", "the tiled wall"),
+    ],
+)
+def test_support_surface_filed_under_on_is_flagged(description, object_text):
+    hits = _support_surfaces_misfiled_under_on(
+        description, [{"object": object_text, "cue": "on", "key": "on"}]
+    )
+    assert hits == [object_text]
+
+
+@pytest.mark.parametrize(
+    "description,object_text",
+    [
+        # the inverse wording, where "on" IS the right key: the description contains no
+        # "on <the other object>" phrase, so the detector must stay silent.
+        ("White bed with a blue blanket", "a blue blanket"),
+        ("Wooden table with books on it", "books"),
+        ("Gray couch with pillows under three framed artworks", "pillows"),
+        ("Kitchen lower cabinet with a sink on top", "a sink"),
+    ],
+)
+def test_genuine_on_relations_are_not_flagged(description, object_text):
+    hits = _support_surfaces_misfiled_under_on(
+        description, [{"object": object_text, "cue": "with", "key": "on"}]
+    )
+    assert hits == []
+
+
+def test_support_surface_under_the_correct_key_is_not_flagged():
+    # same description, correctly filed -- only key == "on" is ever a problem
+    for key in ("below", "next to"):
+        hits = _support_surfaces_misfiled_under_on(
+            "Terracotta vase on a wooden cabinet",
+            [{"object": "a wooden cabinet", "cue": "on", "key": key}],
+        )
+        assert hits == []
+
+
+def test_support_surface_detection_ignores_article_mismatch():
+    # the model may return the object with or without its article
+    for object_text in ("wooden cabinet", "a wooden cabinet", "the wooden cabinet"):
+        hits = _support_surfaces_misfiled_under_on(
+            "Terracotta vase on a wooden cabinet",
+            [{"object": object_text, "cue": "on", "key": "on"}],
+        )
+        assert hits == [object_text], object_text
+
+
+def test_validate_flags_misfiled_support_surface_with_description():
+    problems = _validate(
+        {"Target": ["it is terracotta"], "on": ["a wooden cabinet"]},
+        "Terracotta vase on a wooden cabinet",
+        [{"object": "a wooden cabinet", "cue": "on", "key": "on"}],
+    )
+    assert len(problems) == 1
+    assert "belongs under 'below'" in problems[0]
+
+
+def test_validate_without_description_still_runs_the_spatial_word_check():
+    # scripts/run_atomicity_experiment.py calls _validate(checklist) with one argument
+    assert _validate({"Target": ["it is next to a nightstand"]}) != []
+    assert _validate({"Target": ["it is white"]}) == []
 
 
 # --- merge: checklist's non-Target entries are built from other_objects, not the model ---------

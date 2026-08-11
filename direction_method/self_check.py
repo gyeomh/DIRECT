@@ -47,12 +47,22 @@ Not confirmed is not the same as contradicted. When in doubt, answer "yes".
    "sofa" / couch                              -> yes
    "shelving" / open shelves                   -> yes
 
-3. COLOR VARIANCE. Same color family under different lighting or wording.
-   "navy" / dark blue, deep blue               -> yes
-   "white" / off-white, cream, ivory           -> yes
-   "grey" / light grey, greige                 -> yes
-   "wooden" / oak, pine, walnut, natural wood  -> yes
-   Only clearly different families contradict: navy vs white, black vs beige.
+3. COLOR VARIANCE. Be generous here. Colors are named loosely, and lighting,
+   white balance, and shadow shift them further. Read the stated color as a broad
+   family, never as an exact swatch.
+   All pale neutrals are ONE family — white, off-white, cream, ivory, beige,
+   tan, taupe, sand, greige, light grey, and light natural wood all match each
+   other.                                                          -> yes
+   "beige" / wood, oak, pine, tan, cream, light brown              -> yes
+   "wooden" / oak, pine, walnut, natural wood, beige or tan tones   -> yes
+   "navy" / dark blue, deep blue, near-black blue                  -> yes
+   "grey" / light grey, greige, silver, charcoal                   -> yes
+   "black" / very dark grey, near-black brown, dark charcoal       -> yes
+   Answer "no" on color ONLY when the two colors are unmistakably different
+   hues — green vs red, green vs yellow, blue vs orange, red vs white.
+   A difference of shade, tint, saturation, or warmth inside one family is
+   never a contradiction. If you would need to compare paint chips to tell the
+   two colors apart, answer "yes".
 
 4. APPROXIMATE POSITION. Spatial terms are coarse.
    "left" covers the whole left portion — upper-left, lower-left, near or far,
@@ -83,8 +93,8 @@ Not confirmed is not the same as contradicted. When in doubt, answer "yes".
 10. RELATED OBJECT, SIMILAR SHAPE, MATCHING COLOR. The claim names one specific
     object, and the region holds a different but closely related object — same
     general category, similar silhouette — AND the color the claim states matches
-    what you see. Do not require the exact object name; a shared shape/silhouette
-    plus matching color is enough.
+    what you see (matching per rule 3: same family is enough). Do not require the
+    exact object name; a shared shape/silhouette plus matching color is enough.
     Claim: "a black music note decoration" / Image: a black music staff/sheet
     decoration, similar shape                                        -> yes
     Claim: "a brown wooden shelf" / Image: a brown wooden bookshelf   -> yes
@@ -97,8 +107,10 @@ Not confirmed is not the same as contradicted. When in doubt, answer "yes".
 === THESE ARE CONTRADICTIONS — answer "no" ===
 
 1. WRONG ATTRIBUTE, CLEARLY VISIBLE. The object is plainly visible and the stated
-   attribute is plainly different.
+   attribute is plainly different. For color this means a different hue family
+   per rule 3 above — a different shade or tint of the same family is not enough.
    Claim: "the cabinet is navy blue" / Image: the cabinet is clearly white -> no
+   Claim: "the white counter" / Image: the counter is beige            -> yes
 
 2. WRONG OBJECT TYPE. The region clearly holds something of a different kind, and
    nothing matching the assertion is anywhere in that region. Does not apply when

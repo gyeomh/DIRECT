@@ -19,3 +19,6 @@ manual_play/queue/*.jsonl
 results/*.gzip.json
 results/summary*/
 results_*/
+direction_method/artifacts/**/*.gzip.json
+direction_method/artifacts/**/eval_logs/
+direction_method/artifacts/**/server.log*
