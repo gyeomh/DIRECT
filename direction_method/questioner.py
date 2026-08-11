@@ -32,7 +32,7 @@ from checklist_update import checklist_update as run_checklist_update  # noqa: E
 from context_parser import parse_context  # noqa: E402
 from llm import LLMClient, image_hash  # noqa: E402
 from self_check import is_failure, self_check  # noqa: E402
-from templates import question_for, region_for  # noqa: E402
+from templates import assertion_for_answer, question_for, region_for  # noqa: E402
 from zone_gen import ZoneGenError, locate, resolve_relations, zones  # noqa: E402
 
 FIRST_QUESTION_TEMPLATE = "Can you describe the {TARGET}'s location and visual appearance (e.g., color, shape, size)."
@@ -255,9 +255,14 @@ class DirectionMethodQuestioner(QuestionerInterface):
             question_text = candidate.awaiting_question
             candidate.awaiting_relation = None
             candidate.awaiting_question = None
-            candidate.round_answers.append((relation, answer))
+            # A bare "nothing" becomes the canonical emptiness assertion before it reaches either
+            # consumer (templates.assertion_for_answer): self_check cannot judge "nothing", and
+            # checklist_update files answers verbatim, so an un-normalized one would be re-checked
+            # against every later candidate too. Everything else passes through untouched.
+            assertion = assertion_for_answer(answer)
+            candidate.round_answers.append((relation, assertion))
             region = region_for(relation, self.target_phrase)
-            result = self_check(self.llm_client, image, region, answer)
+            result = self_check(self.llm_client, image, region, assertion)
             candidate.log.self_check_calls += 1
             candidate.log.verdicts.append(result.verdict)
             candidate.log.interactions.append({
@@ -265,6 +270,8 @@ class DirectionMethodQuestioner(QuestionerInterface):
                 "relation": relation,
                 "question": question_text,
                 "answer": answer,
+                # what self_check was actually given -- equal to `answer` unless it was normalized
+                "assertion": assertion,
                 "region": region,
                 "verdict": result.verdict,
                 "evidence": result.evidence,

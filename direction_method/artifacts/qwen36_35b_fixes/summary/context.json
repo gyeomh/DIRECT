@@ -1,0 +1,23 @@
+{
+  "episodes_file": "/home/gyeom/coin_challenge/episodes_train.jsonl",
+  "description_type": "context",
+  "questioner": "direction_method",
+  "oracle_backend": "vllm",
+  "oracle_model_id": "Qwen/Qwen3.6-35B-A3B-FP8",
+  "evaluated_episodes": 167,
+  "successful_episodes": 139,
+  "accuracy": 0.8323353293413174,
+  "total_score": 852,
+  "mean_score": 5.1017964071856285,
+  "total_questions": 578,
+  "scoring": {
+    "complete_success": "10 - number_of_questions",
+    "failure": 0
+  },
+  "_env_reward_total": 3702,
+  "_env_reward_mean": 22.167664670658684,
+  "_env_reward_scoring": "+10 per correct conclusion, -10 per wrong one, -1 per question",
+  "_logged_episodes": 157,
+  "_discarded_episodes": 10,
+  "_accuracy_over_logged": 0.8853503184713376
+}

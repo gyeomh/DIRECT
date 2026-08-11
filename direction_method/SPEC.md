@@ -270,11 +270,64 @@ QUESTION_TEMPLATES = {
     "right-top":    "What is above and to the right of the {t}?",
     "left-bottom":  "What is below and to the left of the {t}?",
     "right-bottom": "What is below and to the right of the {t}?",
-    "on":           "What is on top of the {t}?",
+    "on":           "What is resting on the {t}'s top surface?",
 }
 ```
 
 Every `QUESTION_TEMPLATES` entry has `" Can you describe the shape and color?"` appended.
+
+**`on`'s question was reworded 2026-08-11 — the region string was not.** It read *"What is on top of the
+{t}?"*, which is loose enough in ordinary English that the oracle answers it as `above`: on the 27B
+run it named the wall painting for a piano and the upper cabinet for an oven. `self_check` then reads
+`region = "on top of the {t}"` strictly and scores a contradiction. `on` was the worst relation in
+that run at 33/269 (12.3%) — 3x `above`'s 3.9% — and 27/159 (17%) when asked without `above`. The two
+directions are **not symmetric**, which is why only this one key changed: the oracle conflating them
+costs nothing in the `above` direction (an object resting on the target still satisfies *"above the
+{t}"* under `self_check`'s coarse-position rule) and a false `"no"` in the `on` direction. `zone_gen`
+and `region_for` already had the relation right — *"the top surface of the target itself, objects
+resting on it"* — so the fix is to make the question say what they already mean, reusing `zone_gen`'s
+own words, not to merge the two relations. `above`/`on top of`/`on (mounted)` stay three distinct
+things; the mounted case never reaches this table (`zone_gen` has no mounting key) and is tracked
+separately in §11.
+
+**Measured, and the plural was a mistake — corrected same day.** The rewording first shipped as
+*"What **objects** are resting…"*. Against the pre-fix 35B baseline logs, the top-surface pinning
+itself **worked**: the oracle stopped naming wall-mounted and overhead objects, and the two exemplar
+failures inverted (`washing machine` → *"White cabinets"* became *"Nothing is resting on the … top
+surface"*; `stove` → *"A silver microwave"* became *"A red kettle … resting on the stove's top
+surface"*). But the plural made the oracle **enumerate the whole surface**: `on` answers went 8.9 →
+10.6 mean words and 2.03 → 2.33 listed items, while every other relation stayed flat or got shorter,
+isolating the cause to this template. A longer conjunctive list is a stricter claim — `self_check`
+must find every item — so `on`'s false-`"no"`s on the true match went **2 → 11** while its distractor
+rejections fell **18 → 13**: worse on both axes, and the only relation that regressed. All 11 came
+from content answers, none from the emptiness path. Reverted to the singular *"What is resting on the
+{t}'s top surface?"*, keeping the pinning and dropping the enumeration pressure. Not yet re-measured.
+
+**Lateral questions carry the viewer convention (2026-08-11).** `zone_gen`'s prompt and
+`self_check`'s rule 4 both pin left/right as screen-relative and explicitly forbid mirroring them as
+if the target were a person facing the camera — but the oracle was never told, leaving it free to
+answer from the object's own point of view. `templates.VIEWER_CONVENTION_CLAUSE` (*"Judge left and
+right as you see them looking at the image, not from the {t}'s own point of view."*) is appended to
+exactly the keys whose question has a lateral component — `templates.LATERAL_KEYS`, derived from the
+table itself so a new lateral key cannot miss it. The vertical-only keys (`above`, `below`, `on`) are
+not mirrorable and are left alone. Supporting asymmetry from the 27B run: `left` failed `self_check`
+54/698 (7.7%) against `right`'s 24/597 (4.0%), and the one left/right flip in §14's hand-read failure
+list is called out there as the most concerning of the five.
+
+**Empty oracle answers are normalized before use (2026-08-11).** A bare `"nothing"` is not a claim
+`self_check` can judge — there is no object in it to look for, so the verdict turns on whatever the
+model thinks it sees and contradiction rule 5 (*"region claimed empty but is not"*) fires. 19 such
+answers appeared in the 27B run and 10 scored `"no"`, all 10 on `on`, where the region is the target's
+own top surface. `templates.assertion_for_answer` rewrites them to the canonical region-stripped
+`EMPTY_REGION_ASSERTION` (*"this region is empty and holds no objects"*) before the answer reaches
+**either** consumer — `self_check`'s `assertion` field and, via `round_answers`, the checklist, which
+matters because `checklist_update` files answers verbatim (§12) and an un-normalized `"nothing"` is
+then re-checked against every later candidate in the episode. The discriminative signal is kept: a
+candidate whose region plainly holds objects still contradicts, by that same rule 5. Detection is
+deliberately tight — `fullmatch` against the answer's first sentence only, with the locative tail
+restricted to an explicit preposition list, so `"nothing but a white wall"` and *"…a plain wall with
+no distinct shape"* stay verbatim. The raw answer is still logged as `interactions[…]["answer"]`
+alongside the `"assertion"` actually judged.
 `REGION_TEMPLATES` has two extra entries, `next to` and `Target`, that `QUESTION_TEMPLATES` does
 not: those two region keys only ever arrive from `context_parser` (§10), never from `zone_gen`, so
 no live question is ever generated for them — `question_for` raises `KeyError` if called with
@@ -345,6 +398,17 @@ type, region claimed empty but is not — this last one added to close the rever
 "region visibly empty" doesn't cover: an assertion claiming a region is empty when it plainly is
 not). Do not paraphrase, shorten, or trim that text when touching this module — the specificity is
 deliberate.
+
+**Color tolerance was loosened 2026-08-11.** The original color-variance case listed four narrow
+families and named `black vs beige` as a contradiction, which left the pale neutrals reading as
+mutually exclusive: `white` vs `beige` and `beige` vs `wood` were both coming back `"no"` — pure
+false-`"no"`s, since these are the same family in every practical sense and lighting alone moves an
+object between them. The rule now states all pale neutrals (white/off-white/cream/ivory/beige/
+tan/taupe/sand/greige/light grey/light natural wood) as **one** family, and pins the contradiction
+threshold to *different hue families* — green vs red, green vs yellow, blue vs orange — with shade,
+tint, saturation, and warmth differences inside a family explicitly not contradictions. The
+"wrong attribute" contradiction case defers to it for color, and the related-object case (rule 10)
+takes its "matching color" from it too, so all three read the same tolerance.
 
 **Prompt layout:** `[image] → [fixed system prompt] → [variable region/assertion]`. The image and
 the entire fixed system-prompt text never change between calls; only the region/assertion suffix
@@ -499,7 +563,17 @@ Assertions follow the same atomic, region-stripped style as everywhere else in t
 a short phrase, not a sentence, that does not restate the region or the target. No invention —
 nothing the description doesn't state.
 
-**Validator: detection only, never reclassification, and now single-purpose.** One check remains
+**`=== "ON" HAS TWO DIRECTIONS ===`** (added 2026-08-11) separates the two readings of the word `on`,
+which is the one relation word whose key meaning (*the target's own top surface*) differs from its
+most common meaning in description text (*the target rests on something*). The discriminator is posed
+as a question about roles — which object is holding the other up — rather than as wording, the same
+shape as the PARTS vs SEPARATE OBJECTS test: other-on-target → `on`, target-on-other → `below`,
+target mounted on a wall → `next to` (a wall behind the target has no honest 2D direction, so it
+reuses the depth-cue escape hatch). It closes with the role-flip note — a blanket is `on` when the bed
+is the target, the bed is `below` when the blanket is the target — since the same object pair appears
+in both directions across description types. See §11 for the measurement that motivated it.
+
+**Validator: detection only, never reclassification, and now two-purpose.** The first check
 (the "does every `other_objects` entry reach the checklist" check is gone — the merge makes that
 true by construction, so checking it would never fire): does any `Target` assertion contain a
 spatial word? If it does, `parse_context` retries **once**, bypassing the disk cache (a cache hit
@@ -509,6 +583,14 @@ not a guaranteed fix — confirmed on the real model that the retry recovers **0
 triggered on, at temperature 0). If the retry is still flagged, `parse_context` logs a `[WARN]`
 line and **returns the result anyway** — `ParsedContext.validation_problems` carries whatever was
 found, so a caller can inspect or count it, but nothing here silently rewrites the model's output.
+
+The second check (added 2026-08-11, `_support_surfaces_misfiled_under_on`) flags an `other_objects`
+entry filed under `on` when the description literally contains `"on <that object>"` — see §11. It
+feeds the same `validation_problems` list and the same single retry, so its practical value is as a
+**per-episode counter** rather than a fix: with the retry recovering 0% at temperature 0, the prompt
+change is what has to carry this one, and this check is how the next run reports whether it did.
+Because the retry is shared, a run with a non-zero rate here also inflates `retried` — read the two
+together, not independently.
 
 **maxItems=8** on `checklist`'s per-key arrays and on `other_objects` itself: confirmed against a
 live server that an unbounded array lets the model enter a token-repetition loop (the same
@@ -521,7 +603,30 @@ descriptions crashed this way before the cap was added).
 
 ## 11. Open items
 
-- **OPEN, found 2026-08-06 — `"target ON x"` files `x` under `on` instead of `below`.** The
+- **ADDRESSED 2026-08-11, not yet measured — `"target ON x"` files `x` under `on` instead of `below`.**
+  `context_parser`'s prompt gained a dedicated `=== "ON" HAS TWO DIRECTIONS ===` section stating that
+  the `on` key means only "the other object rests on the TARGET's top surface", with the discriminator
+  posed as *which object is holding the other up* and worked lines for all three readings (other-on-
+  target → `on`; target-on-other → `below`; mounted on a wall → `next to`, reusing the depth-cue
+  escape hatch). The reversal list gained `"vase ON a wooden cabinet" -> "below"`, and three examples
+  were added (`Terracotta vase on a wooden cabinet`, `Green armchair on a large red rug`, `Black clock
+  hanging on a beige wall`) — examples being what actually moved the equivalent depth-cue fix.
+  `_support_surfaces_misfiled_under_on` counts the failure per episode via `validation_problems`
+  (detection only, same policy as the spatial-word check): it flags an `other_objects` entry filed
+  under `on` when the description literally contains `"on <that object>"`. That test is precise
+  because the target is the head noun these descriptions open with, so an `"on X"` phrase says the
+  target rests on X; the inverse wording that genuinely is `on` never produces the phrase (`"bed with
+  a blue blanket"`, `"cabinet with a lamp on the surface"`). **Scope is larger than the original
+  measurement suggested**: 75 of the 1002 task descriptions carry such a phrase (context 27,
+  color_context 23, color_context_feature 23, color_feature 2), not 41. Whether the prompt fix holds
+  is an open question — if `validation_problems` still shows a meaningful rate on the next full run,
+  the fallback is a deterministic code-level correction (the same predicate already identifies the
+  entry, and `below` vs `next to` would be chosen off a wall-like noun list), which is the pattern
+  this module already follows for key assignment. Deliberately not built yet: it needs that
+  heuristic noun list, and the counter will say whether it is warranted.
+
+  Original writeup, for the mechanism:
+- **~~OPEN, found 2026-08-06~~ — `"target ON x"` files `x` under `on` instead of `below`.** The
   description says the target rests on something; `context_parser` keeps the surface word and files
   that something under `on`, which `templates.region_for` renders as *"on top of the {target}"* —
   the target's own top surface. So `"Terracotta vase on a wooden cabinet"` becomes the assertion
@@ -541,9 +646,10 @@ descriptions crashed this way before the cap was added).
   §10's reversal rule only carries one worked example (`"cabinet UNDER a countertop"` → `above`),
   and `on` is additionally the one relation word whose prompt meaning (*the target's own top
   surface*) differs from its meaning in ordinary description text — so echoing it looks correct to
-  the model. Not fixed yet: deferred deliberately until the three-reviewer error analysis of
-  `full_sweep_qwen36_v2` finishes, so this is corrected together with whatever else that surfaces
-  and measured against one baseline rather than in a sequence of one-off reruns.
+  the model. ~~Not fixed yet: deferred deliberately until the three-reviewer error analysis of
+  `full_sweep_qwen36_v2` finishes~~ — corrected 2026-08-11 as described above, batched with the other
+  changes of that date so all of them are measured against one baseline rather than in a sequence of
+  one-off reruns.
 - Logprob tie-break and follow-up question construction (§7) — deferred.
 - `max_pixels` value.
 - **Resolved, 2026-08-05.** The edge-touch leak logged by `zone_gen`'s geometry cross-check (§5-2)
@@ -551,6 +657,17 @@ descriptions crashed this way before the cap was added).
   the first sample found, including a directly observed case asking about a region ("below") that
   provably had no image content. `edge_touch_log` still records what got filtered, for continued
   monitoring.
+- **Widened 2026-08-11 — the filter existed but its threshold was too tight to fire.** `_EDGE_EPS`
+  was `1` of a 1000-unit frame (0.1%), so only a box flush against the frame counted as touching.
+  Re-measuring `locate` on 25 real images: **8 of the 77 directions `zone_gen` selected had under 5%
+  margin** — boxes with 2, 3, and 5 frame-units of room still had `below`/`right` selected, and a
+  live oracle question was asked about a strip a few pixels tall. This lines up with `below` being
+  the least useful relation in the same run's official logs: **19 false-`"no"`s on the true match
+  against 1 distractor rejection**, i.e. it almost only ever cost episodes. `_EDGE_EPS` is now `50`
+  (5% of frame): a strip thinner than that cannot hold an object the model can describe. Re-measured
+  on the same 25 images: under-5%-margin selections went **8 → 0**, total selections 77 → 69, so only
+  the unusable directions were dropped. The constant is guarded by a test, and the five real bboxes
+  above are regression cases in `tests/test_zone_gen.py`.
 - **Resolved, 2026-08-05.** `context_parser`'s depth cues (`"in front of"`, `"behind"`) had no
   worked example and the model guessed a 2D screen direction for them — confirmed producing
   `key="below"` for a window actually behind the target, poisoning the whole episode's checklist

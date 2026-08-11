@@ -36,6 +36,15 @@ def test_prompt_covers_the_reverse_empty_case():
     assert "REGION CLAIMED EMPTY BUT IS NOT" in SELF_CHECK_PROMPT
 
 
+def test_prompt_treats_pale_neutrals_as_one_color_family():
+    # the false-"no" mode observed on the 2026-08-11 runs: white/beige and beige/wood were being
+    # called contradictions. Color contradicts only across hue families now (green vs red).
+    color_rule = SELF_CHECK_PROMPT.split("3. COLOR VARIANCE.")[1].split("4. APPROXIMATE")[0]
+    for shade in ("white", "beige", "cream", "tan", "greige", "wood"):
+        assert shade in color_rule
+    assert "green vs red" in color_rule
+
+
 def test_build_prompt_embeds_region_and_assertion_as_separate_fields():
     prompt, _ = build_prompt("left of the cabinet", "wooden tiles on a black wall")
     assert "region: left of the cabinet" in prompt

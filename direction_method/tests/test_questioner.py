@@ -19,6 +19,7 @@ from questioner import (
     TOTAL_TIME_BUDGET_S,
     DirectionMethodQuestioner,
 )
+from templates import EMPTY_REGION_ASSERTION
 
 IMG_A = np.zeros((12, 12, 3), dtype=np.uint8)
 IMG_B = np.full((12, 12, 3), 80, dtype=np.uint8)
@@ -560,6 +561,41 @@ def test_relation_answer_check_interaction_is_logged_with_full_detail(tmp_path):
     assert interactions[0]["verdict"] == "yes"
     assert interactions[1]["relation"] == "left"
     assert interactions[1]["answer"] == "a wooden table"
+
+
+def test_empty_oracle_answer_is_normalized_before_self_check_and_the_checklist(tmp_path):
+    """A bare "nothing" reaching self_check verbatim was the measured failure (2026-08-11 27B run:
+    10 of 19 emptiness answers scored "no"). It must arrive as the canonical emptiness assertion in
+    both consumers -- self_check's `assertion` field and, via round_answers, the checklist -- while
+    the raw answer stays in the log for auditing.
+    """
+    q, scripted = make_questioner(
+        tmp_path, checklist={}, zones_regions=[{"note": "n", "key": "on"}], self_check_verdicts=["yes", "yes"],
+    )
+    call(q, IMG_A, answer=None)  # asks Target
+    call(q, IMG_A, answer="a navy blue cabinet")  # answers Target, asks on
+    call(q, IMG_A, answer="nothing")  # answers on
+
+    on_check = q.candidate_logs[0].interactions[1]
+    assert on_check["relation"] == "on"
+    assert on_check["answer"] == "nothing"  # raw, for auditing
+    assert on_check["assertion"] == EMPTY_REGION_ASSERTION  # what self_check actually judged
+    # checklist_update files answers verbatim, so the normalized form is what gets re-checked
+    # against every later candidate in the episode.
+    assert q.checklist["on"] == [EMPTY_REGION_ASSERTION]
+
+
+def test_content_oracle_answer_reaches_self_check_verbatim(tmp_path):
+    q, scripted = make_questioner(
+        tmp_path, checklist={}, zones_regions=[{"note": "n", "key": "on"}], self_check_verdicts=["yes", "yes"],
+    )
+    call(q, IMG_A, answer=None)
+    call(q, IMG_A, answer="a navy blue cabinet")
+    call(q, IMG_A, answer="a white sink")
+
+    on_check = q.candidate_logs[0].interactions[1]
+    assert on_check["answer"] == on_check["assertion"] == "a white sink"
+    assert q.checklist["on"] == ["a white sink"]
 
 
 def test_zone_gen_detail_logged_on_candidate(tmp_path):

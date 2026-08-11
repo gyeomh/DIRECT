@@ -1,0 +1,43 @@
+{
+  "description_type": "ALL (6 types aggregated)",
+  "oracle_model_id": "Qwen/Qwen3.6-35B-A3B-FP8",
+  "evaluated_episodes": 1002,
+  "successful_episodes": 788,
+  "total_score": 4756,
+  "total_questions": 3438,
+  "per_type": {
+    "category": {
+      "accuracy": 0.8263473053892215,
+      "successful_episodes": 138,
+      "total_score": 797
+    },
+    "color": {
+      "accuracy": 0.7964071856287425,
+      "successful_episodes": 133,
+      "total_score": 779
+    },
+    "context": {
+      "accuracy": 0.8323353293413174,
+      "successful_episodes": 139,
+      "total_score": 852
+    },
+    "color_feature": {
+      "accuracy": 0.7305389221556886,
+      "successful_episodes": 122,
+      "total_score": 730
+    },
+    "color_context": {
+      "accuracy": 0.7844311377245509,
+      "successful_episodes": 131,
+      "total_score": 803
+    },
+    "color_context_feature": {
+      "accuracy": 0.7485029940119761,
+      "successful_episodes": 125,
+      "total_score": 795
+    }
+  },
+  "_note": "Aggregated by hand from the six per-type summaries. summarize_official.py writes an ALL.json scoped to whatever --results-glob matched, so a per-type invocation leaves an 'ALL' file describing one type; that file is not this one.",
+  "accuracy": 0.7864271457085829,
+  "mean_score": 4.746506986027944
+}
