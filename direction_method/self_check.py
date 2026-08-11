@@ -16,6 +16,7 @@ two ever drifting apart -- this module is the single source of truth for the lit
 import json
 from dataclasses import dataclass
 
+from color_family import reconcile as reconcile_color
 from llm import LLMClient
 
 SELF_CHECK_PROMPT = """You verify a single claim against an image of an indoor scene.
@@ -167,6 +168,8 @@ def build_prompt(region: str, assertion: str) -> tuple[str, dict]:
 class SelfCheckResult:
     evidence: str
     verdict: str  # "yes" | "no" | "PARSE_ERROR"
+    color_reconciled: bool = False  # a "no" overridden as within-family color variance
+    raw_verdict: str = ""  # the model's own verdict, kept when it was overridden
 
 
 def self_check(llm_client: LLMClient, image, region: str, assertion: str) -> SelfCheckResult:
@@ -174,9 +177,19 @@ def self_check(llm_client: LLMClient, image, region: str, assertion: str) -> Sel
     result = llm_client.call(prompt, image, response_schema=schema)
     try:
         parsed = json.loads(result.text)
-        return SelfCheckResult(evidence=parsed["evidence"], verdict=parsed["verdict"])
+        evidence, verdict = parsed["evidence"], parsed["verdict"]
     except (json.JSONDecodeError, KeyError, TypeError):
         return SelfCheckResult(evidence="", verdict="PARSE_ERROR")
+
+    # The one judgment not left to the model. Rule 3 above says the pale neutrals are one family;
+    # the model reads colors correctly and then ignores that rule anyway, through three separate
+    # rewrites of it (color_family.py's docstring has the measurements: 3/8 before and after each).
+    # Its evidence names what it saw, so the naming is taken from there and the family call is made
+    # in code. One-directional by construction: only "no" can be overturned, never "yes", so this
+    # cannot introduce a false "no" -- it can only fail to reject a distractor on color.
+    if verdict == "no" and reconcile_color(assertion, evidence):
+        return SelfCheckResult(evidence=evidence, verdict="yes", color_reconciled=True, raw_verdict="no")
+    return SelfCheckResult(evidence=evidence, verdict=verdict)
 
 
 def is_failure(verdict: str) -> bool:
