@@ -12,10 +12,6 @@ phrase plus a checklist of claims grouped by spatial relation, ground the target
 image, ask the oracle about the directions around it, and check every answer against the candidate
 before accepting it.
 
-> Upstream's own README is preserved verbatim as [`UPSTREAM_README.md`](UPSTREAM_README.md). It is
-> renamed only to avoid a `README.md` / `README.MD` collision on case-insensitive filesystems; the
-> contents are byte-identical to upstream.
-
 ---
 
 ## How it works
@@ -51,9 +47,6 @@ The loop, per candidate:
 
 The checklist persists for the whole episode and only grows, so later candidates are rejected by
 cheap image checks instead of new questions.
-
-Full design rationale, including what was tried and rejected: [`direction_method/SPEC.md`](direction_method/SPEC.md).
-Harness facts the design is built around: [`direction_method/ENV.md`](direction_method/ENV.md).
 
 ---
 
@@ -150,8 +143,9 @@ VLM_PORT=8002 python direction_method/scripts/run_official_eval.py 0 167 \
   upstream's own construction (Gemini, or a local VLM via `ORACLE_MODEL_ID` + `--local 1`);
   `mock` returns one fixed string and is for plumbing tests only.
 
-Upstream files are **never edited**. The ENV-level fixes are applied to `eval_model.py`'s source
-*in memory* before it is executed — see [`direction_method/patches/README.md`](direction_method/patches/README.md).
+Upstream files are **never edited**. Three documented upstream bugs are patched into `eval_model.py`'s
+source *in memory* before it is executed, via `direction_method/patches/apply_patches.py` — the
+file on disk stays byte-identical to upstream.
 
 Before running anything, the script refuses to start unless the server is actually usable: it
 checks that the served model is the one the questioner will request, and issues a real completion
@@ -227,12 +221,8 @@ silently absorbed.
 ```
 env.py, eval_model.py, Questioner.py, utils.py, Oracle.py, episodes_train.jsonl
                               upstream harness — byte-identical, never edited
-UPSTREAM_README.md            upstream's README, verbatim
 
 direction_method/
-  SPEC.md                     design, experiments, and what was rejected
-  ENV.md                      fixed facts about the harness
-  HANDOFF.md                  bringing this up on a fresh GPU machine
   questioner.py               the QuestionerInterface implementation
   context_parser.py  zone_gen.py  self_check.py  checklist_update.py
   color_family.py              color-family reconciliation self_check calls into
