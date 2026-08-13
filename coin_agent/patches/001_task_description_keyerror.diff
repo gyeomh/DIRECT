@@ -1,6 +1,0 @@
---- a/eval_model.py
-+++ b/eval_model.py
-@@ -158,7 +158,7 @@
-             questioner.reset_time()
--            print(f"Task is: {info['task_description']}")
-+            print(f"Task is: {info['target_description']}")
