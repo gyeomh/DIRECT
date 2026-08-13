@@ -164,25 +164,6 @@ python direction_method/scripts/summarize_official.py \
     --oracle-model-id Qwen/Qwen3.6-35B-A3B-FP8
 ```
 
-### The parallel sweep (development)
-
-Faster, resumable, and writes rich per-episode traces, but reimplements the loop:
-
-```bash
-SWEEP_LOG_ROOT=/path/to/logs VLM_PORT=8002 python direction_method/scripts/run_full_sweep.py
-```
-
-**Do not raise `SWEEP_WORKERS` above its default of 3** for the default model. At 6 and at 12 the
-server wedges partway through a sweep — requests time out and the GPU stays pinned until the
-*server* process is `kill -9`'d, so it is a stuck server-side generation, not client queueing. The
-root cause is not isolated.
-
-Browse a sweep's traces in a local viewer:
-
-```bash
-VIEWER_LOG_ROOT=/path/to/logs python direction_method/scripts/serve_viewer.py
-```
-
 ---
 
 ## Caching: on for development, off for measurement
@@ -259,7 +240,8 @@ direction_method/
   llm.py                      vllm client, disk cache, call accounting
   oracle_stub.py              local oracle stand-in (sees only the target image)
   patches/                    upstream bug fixes, applied in memory at runtime
-  scripts/                    eval drivers, per-module experiments, log viewer
+  scripts/                    run_official_eval.py + summarize_official.py — the two
+                               scripts "Running" above uses; nothing else ships here
   tests/                      298 tests, all runnable with no GPU
 ```
 
