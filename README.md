@@ -1,14 +1,16 @@
-# CoIN Challenge — `direction_method`
+# DIRECT — CoIN Challenge questioner
 
-A questioner for the [CoIN Challenge](https://github.com/e-zorzi/coin_challenge): a "20 questions"
+**DIRECT** — **DI**rectional **RE**asoning via grounding images with **C**heck**lisT**s — is a
+questioner for the [CoIN Challenge](https://github.com/e-zorzi/coin_challenge): a "20 questions"
 game where an oracle holds one fixed target image, you are shown candidate images one at a time,
 and you must decide which candidate is the same object instance as the target — asking the oracle
 as few clarifying questions as possible.
 
-This repo is the upstream challenge harness, unmodified, plus `direction_method/`, a solution that
-works by **spatial context**: parse the description into a target phrase plus a checklist of claims
-grouped by spatial relation, ground the target in each candidate image, ask the oracle about the
-directions around it, and check every answer against the candidate before accepting it.
+This repo is the upstream challenge harness, unmodified, plus `direction_method/` (DIRECT's
+implementation), a solution that works by **spatial context**: parse the description into a target
+phrase plus a checklist of claims grouped by spatial relation, ground the target in each candidate
+image, ask the oracle about the directions around it, and check every answer against the candidate
+before accepting it.
 
 > Upstream's own README is preserved verbatim as [`UPSTREAM_README.md`](UPSTREAM_README.md). It is
 > renamed only to avoid a `README.md` / `README.MD` collision on case-insensitive filesystems; the
@@ -26,6 +28,13 @@ Four modules, all backed by the same VLM, wired together by `DirectionMethodQues
 | `zone_gen` | candidate image + target category | bounding box, then which surrounding directions are worth asking about |
 | `self_check` | candidate image + (region, claim) | evidence + a yes/no verdict |
 | `checklist_update` | checklist + this round's (relation, answer) pairs | grown checklist (no LLM call) |
+
+`color_family.py` supports `self_check`: when it returns a contradiction, `self_check` reads colors
+accurately but does not reliably apply "same color family" as a single rule regardless of how the
+rule is worded (measured — three separate prompt rewrites produced byte-identical verdicts). The
+claimed and perceived color terms are extracted from the assertion/evidence text and compared
+against a hue+lightness family table in code instead; this can only turn a `"no"` into a `"yes"`,
+never the reverse, so it cannot introduce a new false rejection.
 
 The loop, per candidate:
 
@@ -84,7 +93,7 @@ That is upstream's own `scripts/install.sh` list plus `pytest`, which the test s
 Verify without a GPU — the whole pipeline runs against a canned offline backend:
 
 ```bash
-python -m pytest direction_method/tests -q     # 177 passed
+python -m pytest direction_method/tests -q     # 298 passed
 ```
 
 ### 3. Serving environment
@@ -245,12 +254,13 @@ direction_method/
   HANDOFF.md                  bringing this up on a fresh GPU machine
   questioner.py               the QuestionerInterface implementation
   context_parser.py  zone_gen.py  self_check.py  checklist_update.py
+  color_family.py              color-family reconciliation self_check calls into
   templates.py                shared region/question wording, one table for both paths
   llm.py                      vllm client, disk cache, call accounting
   oracle_stub.py              local oracle stand-in (sees only the target image)
   patches/                    upstream bug fixes, applied in memory at runtime
   scripts/                    eval drivers, per-module experiments, log viewer
-  tests/                      177 tests, all runnable with no GPU
+  tests/                      298 tests, all runnable with no GPU
 ```
 
 ---
