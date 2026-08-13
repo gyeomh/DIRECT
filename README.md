@@ -81,7 +81,7 @@ pip install retrying flask attrs gymnasium colorama accelerate transformers==4.4
     opencv-python dotenv qwen-vl-utils huggingface_hub google-genai openai numpy pytest
 ```
 
-That is upstream's own `scripts/install.sh` list plus `pytest`, which the test suite needs.
+That's the same package list upstream's own installer used, plus `pytest`, which the test suite needs.
 
 Verify without a GPU — the whole pipeline runs against a canned offline backend:
 
